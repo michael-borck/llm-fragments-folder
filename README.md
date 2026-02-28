@@ -107,13 +107,17 @@ This means LLM's fragment deduplication works at the file level. If you referenc
 # Clone and install for development
 git clone https://github.com/michael-borck/llm-fragments-folder.git
 cd llm-fragments-folder
-pip install -e ".[test]"
+uv sync
 
 # Run tests
-pytest
+uv run pytest
 
-# Run tests with coverage
-pytest --cov=llm_fragments_folder
+# Lint and format
+uv run ruff check .
+uv run ruff format .
+
+# Type checking
+uv run mypy llm_fragments_folder.py
 ```
 
 ## Acknowledgments
