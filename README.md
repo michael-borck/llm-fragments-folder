@@ -98,19 +98,42 @@ llm -f project:. -f issue:user/repo/42 "Implement this feature"
 
 ### Filtering by extension
 
-Use `?ext=` to load only specific file types. This bypasses the default text file detection and only includes files matching the given extensions:
+Use `?ext=` to control which file types are loaded. Extensions can be specified with or without the leading dot (`md` and `.md` both work). Multiple extensions are comma-separated.
+
+#### Include only (default)
 
 ```bash
 llm -f "folder:./src?ext=py,js,ts" "Review this code"
 llm -f "project:.?ext=md,txt" "Summarize the documentation"
-llm -f "folder:.?ext=csv,json" "Analyze this data"
 ```
 
-Extensions can be specified with or without the leading dot (`md` and `.md` both work). Multiple extensions are comma-separated.
+#### Exclude with `!`
+
+Prefix extensions with `!` to exclude them (everything else is included):
+
+```bash
+# Everything except markdown
+llm -f "folder:.?ext=!md" "Review the non-docs files"
+
+# Everything except markdown and text
+llm -f "project:.?ext=!md,!txt" "Focus on the code"
+```
+
+#### Force-include with `+`
+
+Use `+` to force-include custom or non-standard extensions:
+
+```bash
+# Exclude markdown, but include a custom extension
+llm -f "folder:.?ext=!md,+custom" "Review these files"
+
+# Include only Python and a bespoke file type
+llm -f "folder:.?ext=py,+myformat" "Analyze these"
+```
 
 #### Dotfiles
 
-Use `?ext=dotfiles` to grab all dotfiles (`.bashrc`, `.gitconfig`, `.vimrc`, etc.) from a folder:
+Use `dotfiles` to grab all dotfiles (`.bashrc`, `.gitconfig`, `.vimrc`, etc.):
 
 ```bash
 # Load all dotfiles
@@ -121,7 +144,12 @@ llm -f "folder:~?ext=dotfiles,md" "Summarize my config and docs"
 
 # Target a specific dotfile by name
 llm -f "folder:~?ext=.bashrc,.zshrc" "Compare these shell configs"
+
+# Exclude markdown but include all dotfiles
+llm -f "folder:.?ext=!md,dotfiles" "Review configs and code"
 ```
+
+**Binary file detection**: Files containing null bytes are automatically detected as binary and skipped, even if force-included via `+`. This prevents garbled output from PDFs, images, Word docs, etc.
 
 **Safety limits**: Files larger than 1MB are skipped. Maximum 500 files per loader call.
 

@@ -6,9 +6,11 @@ import textwrap
 import pytest
 
 from llm_fragments_folder import (
+    ExtFilter,
     _is_dotfile,
     _is_text_file,
     _parse_argument,
+    _read_file_safe,
     _should_skip_dir,
     _walk_folder,
     folder_loader,
@@ -149,6 +151,28 @@ class TestShouldSkipDir:
         assert _should_skip_dir("mypackage.egg-info") is True
 
 
+class TestReadFileSafe:
+    def test_reads_text(self, tmp_path):
+        f = tmp_path / "test.txt"
+        f.write_text("hello world")
+        assert _read_file_safe(f) == "hello world"
+
+    def test_skips_binary_with_null_bytes(self, tmp_path):
+        f = tmp_path / "test.bin"
+        f.write_bytes(b"hello\x00world")
+        assert _read_file_safe(f) is None
+
+    def test_skips_pdf(self, tmp_path):
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"%PDF-1.4\x00some binary content")
+        assert _read_file_safe(f) is None
+
+    def test_skips_large_files(self, tmp_path):
+        f = tmp_path / "big.txt"
+        f.write_text("x" * 100)
+        assert _read_file_safe(f, max_size=50) is None
+
+
 class TestWalkFolder:
     def test_finds_text_files(self, sample_folder):
         files = _walk_folder(sample_folder)
@@ -188,7 +212,8 @@ class TestWalkFolder:
             _walk_folder(fake)
 
     def test_ext_filter_only_markdown(self, sample_folder):
-        files = _walk_folder(sample_folder, ext_filter={".md"})
+        ef = ExtFilter(include={".md"})
+        files = _walk_folder(sample_folder, ext_filter=ef)
         names = {f.name for f in files}
         assert "README.md" in names
         assert "guide.md" in names
@@ -197,18 +222,21 @@ class TestWalkFolder:
         assert "api.txt" not in names
 
     def test_ext_filter_multiple(self, sample_folder):
-        files = _walk_folder(sample_folder, ext_filter={".md", ".py"})
+        ef = ExtFilter(include={".md", ".py"})
+        files = _walk_folder(sample_folder, ext_filter=ef)
         names = {f.name for f in files}
         assert "README.md" in names
         assert "main.py" in names
         assert "config.yaml" not in names
 
     def test_ext_filter_no_matches(self, sample_folder):
-        files = _walk_folder(sample_folder, ext_filter={".xyz"})
+        ef = ExtFilter(include={".xyz"})
+        files = _walk_folder(sample_folder, ext_filter=ef)
         assert files == []
 
     def test_ext_filter_dotfiles_catchall(self, sample_folder):
-        files = _walk_folder(sample_folder, ext_filter={"dotfiles"})
+        ef = ExtFilter(dotfiles=True)
+        files = _walk_folder(sample_folder, ext_filter=ef)
         names = {f.name for f in files}
         assert ".bashrc" in names
         assert ".gitconfig" in names
@@ -216,15 +244,17 @@ class TestWalkFolder:
         assert "README.md" not in names
         assert "main.py" not in names
 
-    def test_ext_filter_dotfiles_combined(self, sample_folder):
-        files = _walk_folder(sample_folder, ext_filter={"dotfiles", ".py"})
+    def test_ext_filter_dotfiles_combined_include(self, sample_folder):
+        ef = ExtFilter(include={".py"}, dotfiles=True)
+        files = _walk_folder(sample_folder, ext_filter=ef)
         names = {f.name for f in files}
         assert ".bashrc" in names
         assert "main.py" in names
         assert "README.md" not in names
 
     def test_ext_filter_specific_dotfile(self, sample_folder):
-        files = _walk_folder(sample_folder, ext_filter={".bashrc"})
+        ef = ExtFilter(include={".bashrc"})
+        files = _walk_folder(sample_folder, ext_filter=ef)
         names = {f.name for f in files}
         assert ".bashrc" in names
         assert ".gitconfig" not in names
@@ -235,6 +265,52 @@ class TestWalkFolder:
         assert ".bashrc" in names
         assert ".gitconfig" in names
         assert ".vimrc" in names
+
+    def test_exclude_filter(self, sample_folder):
+        ef = ExtFilter(exclude={".md"})
+        files = _walk_folder(sample_folder, ext_filter=ef)
+        names = {f.name for f in files}
+        assert "README.md" not in names
+        assert "guide.md" not in names
+        assert "main.py" in names
+        assert "config.yaml" in names
+        assert ".bashrc" in names
+
+    def test_exclude_multiple(self, sample_folder):
+        ef = ExtFilter(exclude={".md", ".yaml"})
+        files = _walk_folder(sample_folder, ext_filter=ef)
+        names = {f.name for f in files}
+        assert "README.md" not in names
+        assert "config.yaml" not in names
+        assert "main.py" in names
+        assert "api.txt" in names
+
+    def test_exclude_with_force_include(self, sample_folder):
+        # Create a custom extension file
+        (sample_folder / "data.custom").write_text("custom data")
+        ef = ExtFilter(exclude={".md"}, force_include={".custom"})
+        files = _walk_folder(sample_folder, ext_filter=ef)
+        names = {f.name for f in files}
+        assert "README.md" not in names
+        assert "data.custom" in names
+        assert "main.py" in names
+
+    def test_force_include_custom_extension(self, sample_folder):
+        (sample_folder / "data.xyz").write_text("custom data")
+        ef = ExtFilter(include={".py"}, force_include={".xyz"})
+        files = _walk_folder(sample_folder, ext_filter=ef)
+        names = {f.name for f in files}
+        assert "main.py" in names
+        assert "data.xyz" in names
+        assert "README.md" not in names
+
+    def test_exclude_with_dotfiles(self, sample_folder):
+        ef = ExtFilter(exclude={".md"}, dotfiles=True)
+        files = _walk_folder(sample_folder, ext_filter=ef)
+        names = {f.name for f in files}
+        assert "README.md" not in names
+        assert ".bashrc" in names
+        assert "main.py" in names
 
     def test_gitignore_respected(self, git_project):
         files = _walk_folder(git_project, respect_gitignore=True)
@@ -249,49 +325,81 @@ class TestWalkFolder:
 
 class TestParseArgument:
     def test_empty_string(self):
-        path, ext = _parse_argument("")
+        path, ef = _parse_argument("")
         assert path == pathlib.Path.cwd()
-        assert ext is None
+        assert ef is None
 
     def test_dot(self):
-        path, ext = _parse_argument(".")
+        path, ef = _parse_argument(".")
         assert path == pathlib.Path(".")
-        assert ext is None
+        assert ef is None
 
     def test_relative_path(self):
-        path, ext = _parse_argument("./docs")
+        path, ef = _parse_argument("./docs")
         assert path == pathlib.Path("./docs")
-        assert ext is None
+        assert ef is None
 
     def test_home_expansion(self):
-        path, ext = _parse_argument("~/projects")
+        path, ef = _parse_argument("~/projects")
         assert "~" not in str(path)
-        assert ext is None
+        assert ef is None
 
-    def test_ext_filter(self):
-        path, ext = _parse_argument("./docs?ext=md,txt")
+    def test_ext_filter_include(self):
+        path, ef = _parse_argument("./docs?ext=md,txt")
         assert path == pathlib.Path("./docs")
-        assert ext == {".md", ".txt"}
+        assert ef is not None
+        assert ef.include == {".md", ".txt"}
+        assert ef.exclude == set()
 
     def test_ext_filter_with_dots(self):
-        path, ext = _parse_argument(".?ext=.py,.js")
+        path, ef = _parse_argument(".?ext=.py,.js")
         assert path == pathlib.Path(".")
-        assert ext == {".py", ".js"}
+        assert ef is not None
+        assert ef.include == {".py", ".js"}
 
     def test_ext_filter_no_path(self):
-        path, ext = _parse_argument("?ext=md")
+        path, ef = _parse_argument("?ext=md")
         assert path == pathlib.Path(".")
-        assert ext == {".md"}
+        assert ef is not None
+        assert ef.include == {".md"}
 
     def test_ext_filter_dotfiles_keyword(self):
-        path, ext = _parse_argument(".?ext=dotfiles")
+        path, ef = _parse_argument(".?ext=dotfiles")
         assert path == pathlib.Path(".")
-        assert ext == {"dotfiles"}
+        assert ef is not None
+        assert ef.dotfiles is True
+        assert ef.include == set()
 
     def test_ext_filter_dotfiles_combined(self):
-        path, ext = _parse_argument("./src?ext=dotfiles,py,md")
+        path, ef = _parse_argument("./src?ext=dotfiles,py,md")
         assert path == pathlib.Path("./src")
-        assert ext == {"dotfiles", ".py", ".md"}
+        assert ef is not None
+        assert ef.dotfiles is True
+        assert ef.include == {".py", ".md"}
+
+    def test_ext_filter_exclude(self):
+        path, ef = _parse_argument(".?ext=!md,!txt")
+        assert path == pathlib.Path(".")
+        assert ef is not None
+        assert ef.exclude == {".md", ".txt"}
+        assert ef.include == set()
+        assert ef.is_exclude_mode is True
+
+    def test_ext_filter_exclude_with_force_include(self):
+        path, ef = _parse_argument(".?ext=!md,+custom")
+        assert path == pathlib.Path(".")
+        assert ef is not None
+        assert ef.exclude == {".md"}
+        assert ef.force_include == {".custom"}
+        assert ef.is_exclude_mode is True
+
+    def test_ext_filter_mixed(self):
+        path, ef = _parse_argument(".?ext=!md,+xyz,dotfiles")
+        assert path == pathlib.Path(".")
+        assert ef is not None
+        assert ef.exclude == {".md"}
+        assert ef.force_include == {".xyz"}
+        assert ef.dotfiles is True
 
 
 class TestFolderLoader:
@@ -318,6 +426,23 @@ class TestFolderLoader:
         # Should only have .md files
         assert any("My Project" in str(f) for f in fragments)
         assert not any("print('hello')" in str(f) for f in fragments)
+
+    def test_exclude_filter(self, sample_folder):
+        fragments = folder_loader(f"{sample_folder}?ext=!md")
+        # Should not have any .md content
+        assert not any("My Project" in str(f) for f in fragments)
+        assert not any("Guide" in str(f) for f in fragments)
+        # Should have other text files
+        assert any("print('hello')" in str(f) for f in fragments)
+
+    def test_binary_files_skipped_in_output(self, sample_folder):
+        # Create a file with null bytes (actual binary content)
+        (sample_folder / "data.bin").write_bytes(b"\x00\x01\x02\x03")
+        fragments = folder_loader(f"{sample_folder}?ext=+bin,md")
+        # .bin should be walked but skipped by _read_file_safe due to null bytes
+        contents = [str(f) for f in fragments]
+        assert not any("data.bin" in c for c in contents)
+        assert any("My Project" in c for c in contents)
 
 
 class TestProjectLoader:

@@ -6,13 +6,19 @@ Provides two fragment loaders:
   - project:<path> Load project files, respecting .gitignore
 """
 
+from __future__ import annotations
+
+import logging
 import os
 import pathlib
 import subprocess
+from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any
 
 import llm
+
+logger = logging.getLogger(__name__)
 
 pathspec: ModuleType | None
 try:
@@ -212,12 +218,18 @@ def _should_skip_dir(dirname: str) -> bool:
 
 
 def _read_file_safe(path: pathlib.Path, max_size: int = 1_000_000) -> str | None:
-    """Read a file, returning None if it can't be read or is too large."""
+    """Read a file, returning None if it can't be read, is too large, or is binary."""
     try:
-        if path.stat().st_size > max_size:
+        size = path.stat().st_size
+        if size > max_size:
             return None
-        return path.read_text(encoding="utf-8", errors="replace")
-    except (OSError, PermissionError, UnicodeDecodeError):
+        # Check for binary content (null bytes)
+        raw = path.read_bytes()
+        if b"\x00" in raw:
+            logger.warning("Skipping binary file: %s", path)
+            return None
+        return raw.decode("utf-8", errors="replace")
+    except (OSError, PermissionError):
         return None
 
 
@@ -252,16 +264,59 @@ def _get_git_tracked_files(root: pathlib.Path) -> set[str] | None:
     return None
 
 
+def _matches_ext_filter(filepath: pathlib.Path, ef: ExtFilter) -> bool:
+    """Check if a file matches the extension filter."""
+    suffix = filepath.suffix.lower()
+    is_dot = _is_dotfile(filepath)
+    name_lower = filepath.name.lower()
+
+    if ef.is_exclude_mode:
+        # Exclude mode: start with default text detection, then apply filters
+        # Check if excluded by extension or dotfile name
+        if suffix and suffix in ef.exclude:
+            return False
+        if is_dot and name_lower in ef.exclude:
+            return False
+
+        # Force-included extensions always match
+        if suffix and suffix in ef.force_include:
+            return True
+        if is_dot and name_lower in ef.force_include:
+            return True
+
+        # Dotfiles catch-all
+        if ef.dotfiles and is_dot:
+            return True
+
+        # Fall back to default text detection
+        return _is_text_file(filepath)
+
+    # Include mode: only match specified extensions
+    if suffix and suffix in ef.include:
+        return True
+    if is_dot and name_lower in ef.include:
+        return True
+
+    # Force-included extensions
+    if suffix and suffix in ef.force_include:
+        return True
+    if is_dot and name_lower in ef.force_include:
+        return True
+
+    # Dotfiles catch-all
+    return bool(ef.dotfiles and is_dot)
+
+
 def _walk_folder(
     root: pathlib.Path,
     respect_gitignore: bool = False,
     max_files: int = 500,
-    ext_filter: set[str] | None = None,
+    ext_filter: ExtFilter | None = None,
 ) -> list[pathlib.Path]:
     """Walk a folder and return a list of text file paths.
 
-    If ext_filter is provided, only files with those extensions are included
-    (bypassing the default text file detection).
+    If ext_filter is provided, files are matched against the filter rules
+    (include, exclude, force-include, dotfiles).
     """
     root = root.resolve()
     if not root.is_dir():
@@ -297,16 +352,7 @@ def _walk_folder(
 
             # Extension filter or default text detection
             if ext_filter is not None:
-                matched = False
-                if (
-                    filepath.suffix.lower() in ext_filter
-                    or _is_dotfile(filepath)
-                    and (
-                        "dotfiles" in ext_filter or filepath.name.lower() in ext_filter
-                    )
-                ):
-                    matched = True
-                if not matched:
+                if not _matches_ext_filter(filepath, ext_filter):
                     continue
             elif not _is_text_file(filepath):
                 continue
@@ -342,36 +388,66 @@ def _is_dotfile(path: pathlib.Path) -> bool:
     return path.name.startswith(".") and path.suffix == ""
 
 
-def _parse_argument(argument: str) -> tuple[pathlib.Path, set[str] | None]:
+@dataclass
+class ExtFilter:
+    """Parsed extension filter supporting include, exclude, and force-include modes.
+
+    Modes:
+      - include only: ext=md,py → only these extensions
+      - exclude only: ext=!md,!txt → all text files except these
+      - mixed: ext=!md,+custom → all text files except .md, plus .custom
+      - dotfiles: ext=dotfiles → all dotfiles; can combine with above
+    """
+
+    include: set[str] = field(default_factory=set)
+    exclude: set[str] = field(default_factory=set)
+    force_include: set[str] = field(default_factory=set)
+    dotfiles: bool = False
+
+    @property
+    def is_exclude_mode(self) -> bool:
+        """True if using exclusion (possibly with force-includes)."""
+        return len(self.exclude) > 0
+
+
+def _parse_argument(argument: str) -> tuple[pathlib.Path, ExtFilter | None]:
     """Parse the argument string into a Path and optional extension filter.
 
-    Supports ?ext=md,txt,py syntax to filter by file extension.
-    Use ?ext=dotfiles to match all dotfiles (e.g. .bashrc, .gitconfig).
-    Can be combined: ?ext=dotfiles,py,md
+    Supports several filter syntaxes:
+      ?ext=md,txt,py       Include only these extensions
+      ?ext=!md,!txt        Exclude these extensions (include everything else)
+      ?ext=!md,+custom     Exclude .md, force-include .custom files
+      ?ext=dotfiles        All dotfiles; can combine with other modes
 
-    Returns (path, extensions) where extensions is None if no filter.
+    Returns (path, ExtFilter) where ExtFilter is None if no filter.
     """
     if not argument or argument.strip() == "":
         return pathlib.Path.cwd(), None
 
-    ext_filter = None
     path_str = argument
 
-    if "?ext=" in argument:
-        path_str, _, ext_part = argument.partition("?ext=")
-        if not path_str:
-            path_str = "."
-        ext_filter = set()
-        for e in ext_part.split(","):
-            e = e.strip().lower()
-            if not e:
-                continue
-            if e == "dotfiles":
-                ext_filter.add("dotfiles")
-            else:
-                ext_filter.add("." + e.lstrip("."))
+    if "?ext=" not in argument:
+        return pathlib.Path(path_str).expanduser(), None
 
-    return pathlib.Path(path_str).expanduser(), ext_filter
+    path_str, _, ext_part = argument.partition("?ext=")
+    if not path_str:
+        path_str = "."
+
+    ef = ExtFilter()
+    for e in ext_part.split(","):
+        e = e.strip().lower()
+        if not e:
+            continue
+        if e == "dotfiles":
+            ef.dotfiles = True
+        elif e.startswith("!"):
+            ef.exclude.add("." + e[1:].lstrip("."))
+        elif e.startswith("+"):
+            ef.force_include.add("." + e[1:].lstrip("."))
+        else:
+            ef.include.add("." + e.lstrip("."))
+
+    return pathlib.Path(path_str).expanduser(), ef
 
 
 @llm.hookimpl
@@ -389,12 +465,19 @@ def folder_loader(argument: str) -> list[llm.Fragment]:
            llm -f folder:. "What is this about?"
            llm -f folder:~/notes "Find action items"
            llm -f "folder:./docs?ext=md,txt" "Summarize the docs"
+           llm -f "folder:.?ext=!md" "Everything except markdown"
+           llm -f "folder:.?ext=!md,+custom" "Exclude md, include .custom"
 
     Recursively walks the directory, loading all recognized text files.
     Skips common non-text directories (node_modules, .git, __pycache__, etc.)
-    and binary files. Each file becomes a separate fragment.
+    and binary files (detected via null bytes). Each file becomes a separate
+    fragment.
 
-    Use ?ext=md,txt,py to filter by file extension.
+    Filter syntax:
+      ?ext=md,py        Include only these extensions
+      ?ext=!md,!txt     Exclude these (include everything else)
+      ?ext=!md,+custom  Exclude .md, force-include .custom
+      ?ext=dotfiles     All dotfiles (.bashrc, .gitconfig, etc.)
     """
     root, ext_filter = _parse_argument(argument)
     if not root.is_dir():
@@ -419,7 +502,11 @@ def project_loader(argument: str) -> list[llm.Fragment]:
     back to parsing .gitignore patterns. Prepends a file tree summary as
     the first fragment for project context.
 
-    Use ?ext=py,js,ts to filter by file extension.
+    Filter syntax:
+      ?ext=py,js        Include only these extensions
+      ?ext=!md,!txt     Exclude these (include everything else)
+      ?ext=!md,+custom  Exclude .md, force-include .custom
+      ?ext=dotfiles     All dotfiles (.bashrc, .gitconfig, etc.)
     """
     root, ext_filter = _parse_argument(argument)
     if not root.is_dir():
