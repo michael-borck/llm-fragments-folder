@@ -152,6 +152,8 @@ llm -f "folder:.?ext=!dotfiles" "Skip config files"
 llm -f "folder:~?ext=.bashrc,.zshrc" "Compare these shell configs"
 ```
 
+> **Note:** `dotfiles` is a special keyword. If you have a file literally named `.dotfiles`, it will be matched by the `+dotfiles` catch-all (since it is itself a dotfile). To target it specifically, use `?ext=.dotfiles`.
+
 **Binary file detection**: Files containing null bytes are automatically detected as binary and skipped, even if force-included via `+`. This prevents garbled output from PDFs, images, Word docs, etc.
 
 **Safety limits**: Files larger than 1MB are skipped. Maximum 500 files per loader call.
