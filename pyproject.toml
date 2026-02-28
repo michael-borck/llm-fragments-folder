@@ -5,7 +5,7 @@ description = "LLM plugin to load entire folder contents as fragments"
 readme = "README.md"
 authors = [{name = "Michael Borck"}]
 license = {text = "Apache-2.0"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = ["llm>=0.24", "pathspec"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -22,9 +22,25 @@ Issues = "https://github.com/michael-borck/llm-fragments-folder/issues"
 [project.entry-points.llm]
 fragments-folder = "llm_fragments_folder"
 
-[project.optional-dependencies]
-test = ["pytest", "llm"]
-
 [build-system]
-requires = ["setuptools>=68.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "mypy>=1.10", "ruff>=0.8"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

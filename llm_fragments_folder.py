@@ -9,9 +9,12 @@ Provides two fragment loaders:
 import os
 import pathlib
 import subprocess
+from types import ModuleType
+from typing import Any
 
 import llm
 
+pathspec: ModuleType | None
 try:
     import pathspec
 except ImportError:
@@ -21,47 +24,135 @@ except ImportError:
 # File extensions considered "text" by default
 TEXT_EXTENSIONS = {
     # Documents
-    ".md", ".txt", ".rst", ".adoc", ".tex", ".org",
+    ".md",
+    ".txt",
+    ".rst",
+    ".adoc",
+    ".tex",
+    ".org",
     # Code
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go",
-    ".rs", ".java", ".c", ".cpp", ".h", ".hpp", ".cs",
-    ".swift", ".kt", ".scala", ".r", ".jl", ".lua",
-    ".pl", ".pm", ".php", ".sh", ".bash", ".zsh", ".fish",
-    ".ps1", ".bat", ".cmd",
+    ".py",
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".rb",
+    ".go",
+    ".rs",
+    ".java",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".cs",
+    ".swift",
+    ".kt",
+    ".scala",
+    ".r",
+    ".jl",
+    ".lua",
+    ".pl",
+    ".pm",
+    ".php",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".fish",
+    ".ps1",
+    ".bat",
+    ".cmd",
     # Web
-    ".html", ".htm", ".css", ".scss", ".sass", ".less",
-    ".svg", ".xml", ".xsl",
+    ".html",
+    ".htm",
+    ".css",
+    ".scss",
+    ".sass",
+    ".less",
+    ".svg",
+    ".xml",
+    ".xsl",
     # Data / Config
-    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-    ".conf", ".env", ".properties", ".csv", ".tsv",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".env",
+    ".properties",
+    ".csv",
+    ".tsv",
     # Build / CI
-    ".dockerfile", ".makefile", ".cmake",
-    ".gradle", ".sbt",
+    ".dockerfile",
+    ".makefile",
+    ".cmake",
+    ".gradle",
+    ".sbt",
     # Other
-    ".sql", ".graphql", ".proto", ".tf", ".hcl",
-    ".ipynb", ".tex", ".bib", ".vim", ".el",
+    ".sql",
+    ".graphql",
+    ".proto",
+    ".tf",
+    ".hcl",
+    ".ipynb",
+    ".bib",
+    ".vim",
+    ".el",
 }
 
 # Filenames (no extension) that are always text
 TEXT_FILENAMES = {
-    "Makefile", "Dockerfile", "Jenkinsfile", "Vagrantfile",
-    "Procfile", "Gemfile", "Rakefile", "Brewfile",
-    "CMakeLists.txt", "LICENSE", "LICENCE", "COPYING",
-    "README", "CHANGELOG", "CHANGES", "AUTHORS",
-    "CONTRIBUTING", "CLAUDE.md", ".gitignore", ".dockerignore",
-    ".editorconfig", ".env.example", ".eslintrc", ".prettierrc",
-    ".flake8", ".pylintrc",
+    "Makefile",
+    "Dockerfile",
+    "Jenkinsfile",
+    "Vagrantfile",
+    "Procfile",
+    "Gemfile",
+    "Rakefile",
+    "Brewfile",
+    "CMakeLists.txt",
+    "LICENSE",
+    "LICENCE",
+    "COPYING",
+    "README",
+    "CHANGELOG",
+    "CHANGES",
+    "AUTHORS",
+    "CONTRIBUTING",
+    "CLAUDE.md",
+    ".gitignore",
+    ".dockerignore",
+    ".editorconfig",
+    ".env.example",
+    ".eslintrc",
+    ".prettierrc",
+    ".flake8",
+    ".pylintrc",
 }
 
 # Directories to always skip
 SKIP_DIRS = {
-    ".git", ".hg", ".svn",
-    "node_modules", "__pycache__", ".tox", ".nox",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache",
-    "venv", ".venv", "env", ".env",
-    ".eggs", "*.egg-info",
-    "dist", "build",
-    ".idea", ".vscode",
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "__pycache__",
+    ".tox",
+    ".nox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "venv",
+    ".venv",
+    "env",
+    ".env",
+    ".eggs",
+    "*.egg-info",
+    "dist",
+    "build",
+    ".idea",
+    ".vscode",
     ".DS_Store",
 }
 
@@ -99,7 +190,7 @@ def _read_file_safe(path: pathlib.Path, max_size: int = 1_000_000) -> str | None
         return None
 
 
-def _get_gitignore_spec(root: pathlib.Path):
+def _get_gitignore_spec(root: pathlib.Path) -> Any:
     """Parse .gitignore into a pathspec matcher, if available."""
     if pathspec is None:
         return None
@@ -153,10 +244,7 @@ def _walk_folder(
 
     for dirpath, dirnames, filenames in os.walk(root):
         # Filter out skipped directories in-place
-        dirnames[:] = [
-            d for d in dirnames
-            if not _should_skip_dir(d)
-        ]
+        dirnames[:] = [d for d in dirnames if not _should_skip_dir(d)]
         dirnames.sort()
 
         for filename in sorted(filenames):
@@ -168,9 +256,8 @@ def _walk_folder(
             if git_files is not None:
                 if rel_str not in git_files:
                     continue
-            elif gitignore_spec is not None:
-                if gitignore_spec.match_file(rel_str):
-                    continue
+            elif gitignore_spec is not None and gitignore_spec.match_file(rel_str):
+                continue
 
             if _is_text_file(filepath):
                 files.append(filepath)
@@ -207,7 +294,7 @@ def _parse_argument(argument: str) -> pathlib.Path:
 
 
 @llm.hookimpl
-def register_fragment_loaders(register):
+def register_fragment_loaders(register: Any) -> None:
     """Register the folder: and project: fragment loaders."""
     register("folder", folder_loader)
     register("project", project_loader)
@@ -227,14 +314,10 @@ def folder_loader(argument: str) -> list[llm.Fragment]:
     """
     root = _parse_argument(argument)
     if not root.is_dir():
-        raise ValueError(
-            f"folder:{argument} - '{root}' is not a directory"
-        )
+        raise ValueError(f"folder:{argument} - '{root}' is not a directory")
     files = _walk_folder(root, respect_gitignore=False)
     if not files:
-        raise ValueError(
-            f"folder:{argument} - no text files found in '{root}'"
-        )
+        raise ValueError(f"folder:{argument} - no text files found in '{root}'")
     return _build_fragments(root, files, "folder")
 
 
@@ -253,14 +336,10 @@ def project_loader(argument: str) -> list[llm.Fragment]:
     """
     root = _parse_argument(argument)
     if not root.is_dir():
-        raise ValueError(
-            f"project:{argument} - '{root}' is not a directory"
-        )
+        raise ValueError(f"project:{argument} - '{root}' is not a directory")
     files = _walk_folder(root, respect_gitignore=True)
     if not files:
-        raise ValueError(
-            f"project:{argument} - no text files found in '{root}'"
-        )
+        raise ValueError(f"project:{argument} - no text files found in '{root}'")
 
     resolved_root = root.resolve()
     fragments = []
@@ -272,9 +351,7 @@ def project_loader(argument: str) -> list[llm.Fragment]:
         indent = "  " * (len(rel.parts) - 1)
         tree_lines.append(f"{indent}{rel.name}")
     tree_content = "\n".join(tree_lines)
-    fragments.append(
-        llm.Fragment(tree_content, f"project:{root}/FILE_TREE")
-    )
+    fragments.append(llm.Fragment(tree_content, f"project:{root}/FILE_TREE"))
 
     # Add file content fragments
     fragments.extend(_build_fragments(root, files, "project"))

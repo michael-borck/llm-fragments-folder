@@ -7,9 +7,9 @@ import pytest
 
 from llm_fragments_folder import (
     _is_text_file,
+    _parse_argument,
     _should_skip_dir,
     _walk_folder,
-    _parse_argument,
     folder_loader,
     project_loader,
 )
