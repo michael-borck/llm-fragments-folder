@@ -133,20 +133,23 @@ llm -f "folder:.?ext=py,+myformat" "Analyze these"
 
 #### Dotfiles
 
-Use `dotfiles` to grab all dotfiles (`.bashrc`, `.gitconfig`, `.vimrc`, etc.):
+Use `+dotfiles` to include all dotfiles, or `!dotfiles` to exclude them. The `+` prefix keeps the syntax consistent with other extensions:
 
 ```bash
 # Load all dotfiles
-llm -f "folder:~?ext=dotfiles" "Explain my shell config"
+llm -f "folder:~?ext=+dotfiles" "Explain my shell config"
 
 # Combine dotfiles with other extensions
-llm -f "folder:~?ext=dotfiles,md" "Summarize my config and docs"
+llm -f "folder:~?ext=+dotfiles,md" "Summarize my config and docs"
+
+# Exclude markdown but include all dotfiles
+llm -f "folder:.?ext=!md,+dotfiles" "Review configs and code"
+
+# Exclude all dotfiles from results
+llm -f "folder:.?ext=!dotfiles" "Skip config files"
 
 # Target a specific dotfile by name
 llm -f "folder:~?ext=.bashrc,.zshrc" "Compare these shell configs"
-
-# Exclude markdown but include all dotfiles
-llm -f "folder:.?ext=!md,dotfiles" "Review configs and code"
 ```
 
 **Binary file detection**: Files containing null bytes are automatically detected as binary and skipped, even if force-included via `+`. This prevents garbled output from PDFs, images, Word docs, etc.

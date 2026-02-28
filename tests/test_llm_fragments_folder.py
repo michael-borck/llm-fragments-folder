@@ -304,6 +304,16 @@ class TestWalkFolder:
         assert "data.xyz" in names
         assert "README.md" not in names
 
+    def test_exclude_dotfiles(self, sample_folder):
+        ef = ExtFilter(exclude_dotfiles=True)
+        files = _walk_folder(sample_folder, ext_filter=ef)
+        names = {f.name for f in files}
+        assert ".bashrc" not in names
+        assert ".gitconfig" not in names
+        assert ".vimrc" not in names
+        assert "README.md" in names
+        assert "main.py" in names
+
     def test_exclude_with_dotfiles(self, sample_folder):
         ef = ExtFilter(exclude={".md"}, dotfiles=True)
         files = _walk_folder(sample_folder, ext_filter=ef)
@@ -394,11 +404,33 @@ class TestParseArgument:
         assert ef.is_exclude_mode is True
 
     def test_ext_filter_mixed(self):
-        path, ef = _parse_argument(".?ext=!md,+xyz,dotfiles")
+        path, ef = _parse_argument(".?ext=!md,+xyz,+dotfiles")
         assert path == pathlib.Path(".")
         assert ef is not None
         assert ef.exclude == {".md"}
         assert ef.force_include == {".xyz"}
+        assert ef.dotfiles is True
+
+    def test_ext_filter_plus_dotfiles(self):
+        path, ef = _parse_argument(".?ext=!md,+dotfiles")
+        assert path == pathlib.Path(".")
+        assert ef is not None
+        assert ef.exclude == {".md"}
+        assert ef.dotfiles is True
+        assert ef.is_exclude_mode is True
+
+    def test_ext_filter_exclude_dotfiles(self):
+        path, ef = _parse_argument(".?ext=!dotfiles,+dat")
+        assert path == pathlib.Path(".")
+        assert ef is not None
+        assert ef.exclude_dotfiles is True
+        assert ef.force_include == {".dat"}
+        assert ef.is_exclude_mode is True
+
+    def test_ext_filter_bare_dotfiles_still_works(self):
+        path, ef = _parse_argument(".?ext=dotfiles")
+        assert path == pathlib.Path(".")
+        assert ef is not None
         assert ef.dotfiles is True
 
 

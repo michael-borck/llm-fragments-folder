@@ -277,6 +277,8 @@ def _matches_ext_filter(filepath: pathlib.Path, ef: ExtFilter) -> bool:
             return False
         if is_dot and name_lower in ef.exclude:
             return False
+        if ef.exclude_dotfiles and is_dot:
+            return False
 
         # Force-included extensions always match
         if suffix and suffix in ef.force_include:
@@ -396,18 +398,21 @@ class ExtFilter:
       - include only: ext=md,py → only these extensions
       - exclude only: ext=!md,!txt → all text files except these
       - mixed: ext=!md,+custom → all text files except .md, plus .custom
-      - dotfiles: ext=dotfiles → all dotfiles; can combine with above
+      - dotfiles: ext=+dotfiles → include all dotfiles
+      - dotfiles: ext=!dotfiles → exclude all dotfiles
+      - bare dotfiles also works: ext=dotfiles (same as +dotfiles)
     """
 
     include: set[str] = field(default_factory=set)
     exclude: set[str] = field(default_factory=set)
     force_include: set[str] = field(default_factory=set)
     dotfiles: bool = False
+    exclude_dotfiles: bool = False
 
     @property
     def is_exclude_mode(self) -> bool:
         """True if using exclusion (possibly with force-includes)."""
-        return len(self.exclude) > 0
+        return len(self.exclude) > 0 or self.exclude_dotfiles
 
 
 def _parse_argument(argument: str) -> tuple[pathlib.Path, ExtFilter | None]:
@@ -417,7 +422,9 @@ def _parse_argument(argument: str) -> tuple[pathlib.Path, ExtFilter | None]:
       ?ext=md,txt,py       Include only these extensions
       ?ext=!md,!txt        Exclude these extensions (include everything else)
       ?ext=!md,+custom     Exclude .md, force-include .custom files
-      ?ext=dotfiles        All dotfiles; can combine with other modes
+      ?ext=+dotfiles       Include all dotfiles (dotfiles also works)
+      ?ext=!dotfiles       Exclude all dotfiles
+      ?ext=!md,+dotfiles   Exclude .md, include all dotfiles
 
     Returns (path, ExtFilter) where ExtFilter is None if no filter.
     """
@@ -438,8 +445,10 @@ def _parse_argument(argument: str) -> tuple[pathlib.Path, ExtFilter | None]:
         e = e.strip().lower()
         if not e:
             continue
-        if e == "dotfiles":
+        if e in ("dotfiles", "+dotfiles"):
             ef.dotfiles = True
+        elif e == "!dotfiles":
+            ef.exclude_dotfiles = True
         elif e.startswith("!"):
             ef.exclude.add("." + e[1:].lstrip("."))
         elif e.startswith("+"):
@@ -477,7 +486,8 @@ def folder_loader(argument: str) -> list[llm.Fragment]:
       ?ext=md,py        Include only these extensions
       ?ext=!md,!txt     Exclude these (include everything else)
       ?ext=!md,+custom  Exclude .md, force-include .custom
-      ?ext=dotfiles     All dotfiles (.bashrc, .gitconfig, etc.)
+      ?ext=+dotfiles    All dotfiles (.bashrc, .gitconfig, etc.)
+      ?ext=!dotfiles    Exclude all dotfiles
     """
     root, ext_filter = _parse_argument(argument)
     if not root.is_dir():
@@ -506,7 +516,8 @@ def project_loader(argument: str) -> list[llm.Fragment]:
       ?ext=py,js        Include only these extensions
       ?ext=!md,!txt     Exclude these (include everything else)
       ?ext=!md,+custom  Exclude .md, force-include .custom
-      ?ext=dotfiles     All dotfiles (.bashrc, .gitconfig, etc.)
+      ?ext=+dotfiles    All dotfiles (.bashrc, .gitconfig, etc.)
+      ?ext=!dotfiles    Exclude all dotfiles
     """
     root, ext_filter = _parse_argument(argument)
     if not root.is_dir():
