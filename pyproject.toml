@@ -1,0 +1,30 @@
+[project]
+name = "llm-fragments-folder"
+version = "0.1.0"
+description = "LLM plugin to load entire folder contents as fragments"
+readme = "README.md"
+authors = [{name = "Michael Borck"}]
+license = {text = "Apache-2.0"}
+requires-python = ">=3.9"
+dependencies = ["llm>=0.24", "pathspec"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+    "Topic :: Text Processing",
+]
+
+[project.urls]
+Homepage = "https://github.com/michael-borck/llm-fragments-folder"
+Issues = "https://github.com/michael-borck/llm-fragments-folder/issues"
+
+[project.entry-points.llm]
+fragments-folder = "llm_fragments_folder"
+
+[project.optional-dependencies]
+test = ["pytest", "llm"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
