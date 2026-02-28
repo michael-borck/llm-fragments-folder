@@ -6,6 +6,7 @@ import textwrap
 import pytest
 
 from llm_fragments_folder import (
+    _is_dotfile,
     _is_text_file,
     _parse_argument,
     _should_skip_dir,
@@ -28,6 +29,11 @@ def sample_folder(tmp_path):
     docs.mkdir()
     (docs / "guide.md").write_text("# Guide\nSome guide content")
     (docs / "api.txt").write_text("API docs here")
+
+    # Dotfiles
+    (tmp_path / ".bashrc").write_text("export PATH=$PATH:/usr/local/bin")
+    (tmp_path / ".gitconfig").write_text("[user]\n  name = Test")
+    (tmp_path / ".vimrc").write_text("set number")
 
     # Binary-like file (no text extension)
     (tmp_path / "image.png").write_bytes(b"\x89PNG\r\n")
@@ -97,6 +103,31 @@ class TestIsTextFile:
         f.write_text("#!/bin/bash\necho hello")
         assert _is_text_file(f) is True
 
+    def test_bashrc(self, tmp_path):
+        f = tmp_path / ".bashrc"
+        f.write_text("export PATH=/usr/local/bin")
+        assert _is_text_file(f) is True
+
+    def test_gitconfig(self, tmp_path):
+        f = tmp_path / ".gitconfig"
+        f.write_text("[user]\n  name = Test")
+        assert _is_text_file(f) is True
+
+
+class TestIsDotfile:
+    def test_bashrc(self, tmp_path):
+        assert _is_dotfile(tmp_path / ".bashrc") is True
+
+    def test_gitconfig(self, tmp_path):
+        assert _is_dotfile(tmp_path / ".gitconfig") is True
+
+    def test_not_dotfile(self, tmp_path):
+        assert _is_dotfile(tmp_path / "main.py") is False
+
+    def test_dotfile_with_extension(self, tmp_path):
+        # .env.example has suffix .example, so it's not a "pure" dotfile
+        assert _is_dotfile(tmp_path / ".env.example") is False
+
 
 class TestShouldSkipDir:
     def test_node_modules(self):
@@ -156,6 +187,55 @@ class TestWalkFolder:
         with pytest.raises(ValueError, match="Not a directory"):
             _walk_folder(fake)
 
+    def test_ext_filter_only_markdown(self, sample_folder):
+        files = _walk_folder(sample_folder, ext_filter={".md"})
+        names = {f.name for f in files}
+        assert "README.md" in names
+        assert "guide.md" in names
+        assert "main.py" not in names
+        assert "config.yaml" not in names
+        assert "api.txt" not in names
+
+    def test_ext_filter_multiple(self, sample_folder):
+        files = _walk_folder(sample_folder, ext_filter={".md", ".py"})
+        names = {f.name for f in files}
+        assert "README.md" in names
+        assert "main.py" in names
+        assert "config.yaml" not in names
+
+    def test_ext_filter_no_matches(self, sample_folder):
+        files = _walk_folder(sample_folder, ext_filter={".xyz"})
+        assert files == []
+
+    def test_ext_filter_dotfiles_catchall(self, sample_folder):
+        files = _walk_folder(sample_folder, ext_filter={"dotfiles"})
+        names = {f.name for f in files}
+        assert ".bashrc" in names
+        assert ".gitconfig" in names
+        assert ".vimrc" in names
+        assert "README.md" not in names
+        assert "main.py" not in names
+
+    def test_ext_filter_dotfiles_combined(self, sample_folder):
+        files = _walk_folder(sample_folder, ext_filter={"dotfiles", ".py"})
+        names = {f.name for f in files}
+        assert ".bashrc" in names
+        assert "main.py" in names
+        assert "README.md" not in names
+
+    def test_ext_filter_specific_dotfile(self, sample_folder):
+        files = _walk_folder(sample_folder, ext_filter={".bashrc"})
+        names = {f.name for f in files}
+        assert ".bashrc" in names
+        assert ".gitconfig" not in names
+
+    def test_default_includes_known_dotfiles(self, sample_folder):
+        files = _walk_folder(sample_folder)
+        names = {f.name for f in files}
+        assert ".bashrc" in names
+        assert ".gitconfig" in names
+        assert ".vimrc" in names
+
     def test_gitignore_respected(self, git_project):
         files = _walk_folder(git_project, respect_gitignore=True)
         names = {f.name for f in files}
@@ -169,20 +249,49 @@ class TestWalkFolder:
 
 class TestParseArgument:
     def test_empty_string(self):
-        result = _parse_argument("")
-        assert result == pathlib.Path.cwd()
+        path, ext = _parse_argument("")
+        assert path == pathlib.Path.cwd()
+        assert ext is None
 
     def test_dot(self):
-        result = _parse_argument(".")
-        assert result == pathlib.Path(".")
+        path, ext = _parse_argument(".")
+        assert path == pathlib.Path(".")
+        assert ext is None
 
     def test_relative_path(self):
-        result = _parse_argument("./docs")
-        assert result == pathlib.Path("./docs")
+        path, ext = _parse_argument("./docs")
+        assert path == pathlib.Path("./docs")
+        assert ext is None
 
     def test_home_expansion(self):
-        result = _parse_argument("~/projects")
-        assert "~" not in str(result)
+        path, ext = _parse_argument("~/projects")
+        assert "~" not in str(path)
+        assert ext is None
+
+    def test_ext_filter(self):
+        path, ext = _parse_argument("./docs?ext=md,txt")
+        assert path == pathlib.Path("./docs")
+        assert ext == {".md", ".txt"}
+
+    def test_ext_filter_with_dots(self):
+        path, ext = _parse_argument(".?ext=.py,.js")
+        assert path == pathlib.Path(".")
+        assert ext == {".py", ".js"}
+
+    def test_ext_filter_no_path(self):
+        path, ext = _parse_argument("?ext=md")
+        assert path == pathlib.Path(".")
+        assert ext == {".md"}
+
+    def test_ext_filter_dotfiles_keyword(self):
+        path, ext = _parse_argument(".?ext=dotfiles")
+        assert path == pathlib.Path(".")
+        assert ext == {"dotfiles"}
+
+    def test_ext_filter_dotfiles_combined(self):
+        path, ext = _parse_argument("./src?ext=dotfiles,py,md")
+        assert path == pathlib.Path("./src")
+        assert ext == {"dotfiles", ".py", ".md"}
 
 
 class TestFolderLoader:
@@ -202,6 +311,13 @@ class TestFolderLoader:
     def test_nonexistent_folder(self):
         with pytest.raises(ValueError, match="not a directory"):
             folder_loader("/nonexistent/path/that/doesnt/exist")
+
+    def test_ext_filter(self, sample_folder):
+        fragments = folder_loader(f"{sample_folder}?ext=md")
+        assert all("---" in str(f) for f in fragments)
+        # Should only have .md files
+        assert any("My Project" in str(f) for f in fragments)
+        assert not any("print('hello')" in str(f) for f in fragments)
 
 
 class TestProjectLoader:

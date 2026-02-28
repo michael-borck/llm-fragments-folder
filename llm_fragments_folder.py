@@ -25,6 +25,7 @@ except ImportError:
 TEXT_EXTENSIONS = {
     # Documents
     ".md",
+    ".qmd",
     ".txt",
     ".rst",
     ".adoc",
@@ -103,6 +104,7 @@ TEXT_EXTENSIONS = {
 
 # Filenames (no extension) that are always text
 TEXT_FILENAMES = {
+    # Build / project files
     "Makefile",
     "Dockerfile",
     "Jenkinsfile",
@@ -112,6 +114,7 @@ TEXT_FILENAMES = {
     "Rakefile",
     "Brewfile",
     "CMakeLists.txt",
+    # Documentation
     "LICENSE",
     "LICENCE",
     "COPYING",
@@ -121,7 +124,29 @@ TEXT_FILENAMES = {
     "AUTHORS",
     "CONTRIBUTING",
     "CLAUDE.md",
+    # Shell dotfiles
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".profile",
+    ".zshrc",
+    ".zprofile",
+    ".zshenv",
+    ".zlogin",
+    ".zlogout",
+    # Editor / tool dotfiles
+    ".vimrc",
+    ".gvimrc",
+    ".nanorc",
+    ".inputrc",
+    ".tmux.conf",
+    # Git dotfiles
     ".gitignore",
+    ".gitconfig",
+    ".gitattributes",
+    ".gitmodules",
+    # Other config dotfiles
     ".dockerignore",
     ".editorconfig",
     ".env.example",
@@ -129,6 +154,12 @@ TEXT_FILENAMES = {
     ".prettierrc",
     ".flake8",
     ".pylintrc",
+    ".npmrc",
+    ".yarnrc",
+    ".curlrc",
+    ".wgetrc",
+    ".screenrc",
+    ".hushlogin",
 }
 
 # Directories to always skip
@@ -225,8 +256,13 @@ def _walk_folder(
     root: pathlib.Path,
     respect_gitignore: bool = False,
     max_files: int = 500,
+    ext_filter: set[str] | None = None,
 ) -> list[pathlib.Path]:
-    """Walk a folder and return a list of text file paths."""
+    """Walk a folder and return a list of text file paths.
+
+    If ext_filter is provided, only files with those extensions are included
+    (bypassing the default text file detection).
+    """
     root = root.resolve()
     if not root.is_dir():
         raise ValueError(f"Not a directory: {root}")
@@ -259,10 +295,25 @@ def _walk_folder(
             elif gitignore_spec is not None and gitignore_spec.match_file(rel_str):
                 continue
 
-            if _is_text_file(filepath):
-                files.append(filepath)
-                if len(files) >= max_files:
-                    return files
+            # Extension filter or default text detection
+            if ext_filter is not None:
+                matched = False
+                if (
+                    filepath.suffix.lower() in ext_filter
+                    or _is_dotfile(filepath)
+                    and (
+                        "dotfiles" in ext_filter or filepath.name.lower() in ext_filter
+                    )
+                ):
+                    matched = True
+                if not matched:
+                    continue
+            elif not _is_text_file(filepath):
+                continue
+
+            files.append(filepath)
+            if len(files) >= max_files:
+                return files
 
     return files
 
@@ -286,11 +337,41 @@ def _build_fragments(
     return fragments
 
 
-def _parse_argument(argument: str) -> pathlib.Path:
-    """Parse the argument string into a Path, defaulting to cwd."""
+def _is_dotfile(path: pathlib.Path) -> bool:
+    """Check if a file is a dotfile (name starts with '.' and has no real extension)."""
+    return path.name.startswith(".") and path.suffix == ""
+
+
+def _parse_argument(argument: str) -> tuple[pathlib.Path, set[str] | None]:
+    """Parse the argument string into a Path and optional extension filter.
+
+    Supports ?ext=md,txt,py syntax to filter by file extension.
+    Use ?ext=dotfiles to match all dotfiles (e.g. .bashrc, .gitconfig).
+    Can be combined: ?ext=dotfiles,py,md
+
+    Returns (path, extensions) where extensions is None if no filter.
+    """
     if not argument or argument.strip() == "":
-        return pathlib.Path.cwd()
-    return pathlib.Path(argument).expanduser()
+        return pathlib.Path.cwd(), None
+
+    ext_filter = None
+    path_str = argument
+
+    if "?ext=" in argument:
+        path_str, _, ext_part = argument.partition("?ext=")
+        if not path_str:
+            path_str = "."
+        ext_filter = set()
+        for e in ext_part.split(","):
+            e = e.strip().lower()
+            if not e:
+                continue
+            if e == "dotfiles":
+                ext_filter.add("dotfiles")
+            else:
+                ext_filter.add("." + e.lstrip("."))
+
+    return pathlib.Path(path_str).expanduser(), ext_filter
 
 
 @llm.hookimpl
@@ -307,15 +388,18 @@ def folder_loader(argument: str) -> list[llm.Fragment]:
     Usage: llm -f folder:./docs "Summarize these documents"
            llm -f folder:. "What is this about?"
            llm -f folder:~/notes "Find action items"
+           llm -f "folder:./docs?ext=md,txt" "Summarize the docs"
 
     Recursively walks the directory, loading all recognized text files.
     Skips common non-text directories (node_modules, .git, __pycache__, etc.)
     and binary files. Each file becomes a separate fragment.
+
+    Use ?ext=md,txt,py to filter by file extension.
     """
-    root = _parse_argument(argument)
+    root, ext_filter = _parse_argument(argument)
     if not root.is_dir():
         raise ValueError(f"folder:{argument} - '{root}' is not a directory")
-    files = _walk_folder(root, respect_gitignore=False)
+    files = _walk_folder(root, respect_gitignore=False, ext_filter=ext_filter)
     if not files:
         raise ValueError(f"folder:{argument} - no text files found in '{root}'")
     return _build_fragments(root, files, "folder")
@@ -328,16 +412,19 @@ def project_loader(argument: str) -> list[llm.Fragment]:
     Usage: llm -f project:. "Explain this codebase"
            llm -f project:./my-app "What does this project do?"
            llm chat -f project:.
+           llm -f "project:.?ext=py,js" "Review the code"
 
     Like folder: but designed for software projects. Uses git ls-files
     when inside a git repo (the most accurate approach), otherwise falls
     back to parsing .gitignore patterns. Prepends a file tree summary as
     the first fragment for project context.
+
+    Use ?ext=py,js,ts to filter by file extension.
     """
-    root = _parse_argument(argument)
+    root, ext_filter = _parse_argument(argument)
     if not root.is_dir():
         raise ValueError(f"project:{argument} - '{root}' is not a directory")
-    files = _walk_folder(root, respect_gitignore=True)
+    files = _walk_folder(root, respect_gitignore=True, ext_filter=ext_filter)
     if not files:
         raise ValueError(f"project:{argument} - no text files found in '{root}'")
 

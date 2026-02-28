@@ -33,6 +33,10 @@ llm -f folder:~/notes -m claude-sonnet-4-5 "Find all action items"
 
 # Use with system fragments for custom instructions
 llm -f folder:./research --sf "You are a research assistant" "Summarize the key findings"
+
+# Only load specific file types
+llm -f "folder:./docs?ext=md,txt" "Summarize the docs"
+llm -f "folder:.?ext=json,yaml" "Explain these configs"
 ```
 
 ### project: - Load a software project (respects .gitignore)
@@ -49,6 +53,9 @@ llm -f project:. "Review this code for security issues"
 
 # Architecture overview
 llm -f project:~/repos/my-api -m claude-sonnet-4-5 "Describe the architecture"
+
+# Only Python files
+llm -f "project:.?ext=py" "Review this code"
 ```
 
 The `project:` loader:
@@ -78,15 +85,43 @@ llm -f project:. -f issue:user/repo/42 "Implement this feature"
 
 **Text file detection** is based on file extension and filename. Supported types include:
 
-- Documents: `.md`, `.txt`, `.rst`, `.adoc`, `.tex`, `.org`
+- Documents: `.md`, `.qmd`, `.txt`, `.rst`, `.adoc`, `.tex`, `.org`
 - Code: `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.rb`, `.c`, `.cpp`, and many more
 - Config: `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.env`, `.cfg`
 - Web: `.html`, `.css`, `.scss`, `.svg`, `.xml`
 - Data: `.csv`, `.tsv`, `.sql`, `.graphql`
+- Dotfiles: `.bashrc`, `.zshrc`, `.vimrc`, `.gitconfig`, `.tmux.conf`, `.profile`, `.npmrc`, etc.
 - Special files: `Makefile`, `Dockerfile`, `LICENSE`, etc.
 - Shebang scripts: extensionless files starting with `#!`
 
 **Always skipped directories**: `.git`, `node_modules`, `__pycache__`, `.venv`, `venv`, `dist`, `build`, `.idea`, `.vscode`, `.mypy_cache`, `.pytest_cache`, etc.
+
+### Filtering by extension
+
+Use `?ext=` to load only specific file types. This bypasses the default text file detection and only includes files matching the given extensions:
+
+```bash
+llm -f "folder:./src?ext=py,js,ts" "Review this code"
+llm -f "project:.?ext=md,txt" "Summarize the documentation"
+llm -f "folder:.?ext=csv,json" "Analyze this data"
+```
+
+Extensions can be specified with or without the leading dot (`md` and `.md` both work). Multiple extensions are comma-separated.
+
+#### Dotfiles
+
+Use `?ext=dotfiles` to grab all dotfiles (`.bashrc`, `.gitconfig`, `.vimrc`, etc.) from a folder:
+
+```bash
+# Load all dotfiles
+llm -f "folder:~?ext=dotfiles" "Explain my shell config"
+
+# Combine dotfiles with other extensions
+llm -f "folder:~?ext=dotfiles,md" "Summarize my config and docs"
+
+# Target a specific dotfile by name
+llm -f "folder:~?ext=.bashrc,.zshrc" "Compare these shell configs"
+```
 
 **Safety limits**: Files larger than 1MB are skipped. Maximum 500 files per loader call.
 
