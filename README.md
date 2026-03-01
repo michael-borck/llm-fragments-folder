@@ -1,5 +1,9 @@
 # llm-fragments-folder
 
+<!-- BADGES:START -->
+[![chat-bot](https://img.shields.io/badge/-chat--bot-blue?style=flat-square)](https://github.com/topics/chat-bot) [![cli-tool](https://img.shields.io/badge/-cli--tool-blue?style=flat-square)](https://github.com/topics/cli-tool) [![file-loader](https://img.shields.io/badge/-file--loader-blue?style=flat-square)](https://github.com/topics/file-loader) [![knowledge-base](https://img.shields.io/badge/-knowledge--base-blue?style=flat-square)](https://github.com/topics/knowledge-base) [![library](https://img.shields.io/badge/-library-blue?style=flat-square)](https://github.com/topics/library) [![llm](https://img.shields.io/badge/-llm-ff6f00?style=flat-square)](https://github.com/topics/llm) [![python](https://img.shields.io/badge/-python-3776ab?style=flat-square)](https://github.com/topics/python) [![software-project](https://img.shields.io/badge/-software--project-blue?style=flat-square)](https://github.com/topics/software-project) [![llm-tools](https://img.shields.io/badge/-llm--tools-blue?style=flat-square)](https://github.com/topics/llm-tools) [![llm-plugins](https://img.shields.io/badge/-llm--plugins-blue?style=flat-square)](https://github.com/topics/llm-plugins)
+<!-- BADGES:END -->
+
 An [LLM](https://llm.datasette.io/) plugin that loads entire folder contents as fragments, turning any directory into a chat-ready knowledge base.
 
 ## Installation
