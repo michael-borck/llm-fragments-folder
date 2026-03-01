@@ -12,18 +12,12 @@ import logging
 import os
 import pathlib
 import subprocess
-from types import ModuleType
 from typing import Any
 
 import llm
+import pathspec
 
 logger = logging.getLogger(__name__)
-
-pathspec: ModuleType | None
-try:
-    import pathspec
-except ImportError:
-    pathspec = None
 
 
 # File extensions considered "text" by default
@@ -184,12 +178,10 @@ SKIP_DIRS = {
     "env",
     ".env",
     ".eggs",
-    "*.egg-info",
     "dist",
     "build",
     ".idea",
     ".vscode",
-    ".DS_Store",
 }
 
 
@@ -222,11 +214,14 @@ def _read_file_safe(path: pathlib.Path, max_size: int = 1_000_000) -> str | None
         size = path.stat().st_size
         if size > max_size:
             return None
-        # Check for binary content (null bytes)
-        raw = path.read_bytes()
-        if b"\x00" in raw:
-            logger.warning("Skipping binary file: %s", path)
-            return None
+        with open(path, "rb") as f:
+            # Check for binary content (null bytes) in the first 8KB
+            head = f.read(8192)
+            if b"\x00" in head:
+                logger.warning("Skipping binary file: %s", path)
+                return None
+            rest = f.read()
+        raw = head + rest
         return raw.decode("utf-8", errors="replace")
     except (OSError, PermissionError):
         return None
@@ -234,8 +229,6 @@ def _read_file_safe(path: pathlib.Path, max_size: int = 1_000_000) -> str | None
 
 def _get_gitignore_spec(root: pathlib.Path) -> Any:
     """Parse .gitignore into a pathspec matcher, if available."""
-    if pathspec is None:
-        return None
     gitignore_path = root / ".gitignore"
     if not gitignore_path.exists():
         return None
@@ -265,8 +258,6 @@ def _get_git_tracked_files(root: pathlib.Path) -> set[str] | None:
 
 def _compile_glob_filter(glob_param: str) -> Any:
     """Compile a comma-separated glob pattern string into a pathspec matcher."""
-    if pathspec is None:
-        raise ValueError("pathspec library is required for ?glob= filtering")
     patterns = [p.strip() for p in glob_param.split(",") if p.strip()]
     if not patterns:
         return None
@@ -446,8 +437,16 @@ def project_loader(argument: str) -> list[llm.Fragment]:
 
     # Build a file tree summary as the first fragment
     tree_lines = [f"Project: {resolved_root.name}", ""]
+    seen_dirs: set[pathlib.Path] = set()
     for f in files:
         rel = f.relative_to(resolved_root)
+        # Show parent directories that haven't been shown yet
+        for i in range(len(rel.parts) - 1):
+            dir_path = pathlib.Path(*rel.parts[: i + 1])
+            if dir_path not in seen_dirs:
+                seen_dirs.add(dir_path)
+                indent = "  " * i
+                tree_lines.append(f"{indent}{rel.parts[i]}/")
         indent = "  " * (len(rel.parts) - 1)
         tree_lines.append(f"{indent}{rel.name}")
     tree_content = "\n".join(tree_lines)

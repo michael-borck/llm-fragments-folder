@@ -89,7 +89,7 @@ llm -f project:. -f issue:user/repo/42 "Implement this feature"
 
 ### With `?glob=` — you choose
 
-When you specify `?glob=`, only files matching your patterns are included. Use gitignore-style glob patterns, comma-separated. Negate with `!`.
+When you specify `?glob=`, the default extension allowlist is bypassed entirely. Every file matching your patterns is included — nothing is silently dropped. Use gitignore-style glob patterns, comma-separated. Negate with `!` to exclude specific patterns.
 
 ```bash
 # Only markdown files
@@ -110,11 +110,22 @@ llm -f "folder:.?glob=*finance*,!*.txt" "Summarize the finance docs"
 
 ### Without `?glob=` — sensible defaults
 
-Without a filter, files are included based on extension and filename: `.py`, `.md`, `.json`, `.yaml`, `.ts`, `.go`, `.rs`, `.c`, `.cpp`, common dotfiles (`.bashrc`, `.gitconfig`, `.vimrc`, etc.), special files (`Makefile`, `Dockerfile`, `LICENSE`), and extensionless scripts starting with `#!`.
+Without a filter, only files with recognized extensions and filenames are included. This curated allowlist keeps your context relevant — files like `.log`, `.lock`, and `package-lock.json` are excluded by default. If the defaults don't cover your needs, use `?glob=` to take full control. Supported types include:
+
+- **Documents**: `.md`, `.qmd`, `.txt`, `.rst`, `.adoc`, `.tex`, `.org`
+- **Code**: `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.go`, `.rs`, `.java`, `.rb`, `.c`, `.cpp`, `.h`, `.cs`, `.swift`, `.kt`, `.scala`, `.r`, `.jl`, `.lua`, `.pl`, `.php`, `.sh`, `.bash`, `.zsh`, `.fish`, `.ps1`, `.bat`
+- **Config**: `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.conf`, `.env`, `.properties`
+- **Web**: `.html`, `.css`, `.scss`, `.sass`, `.less`, `.svg`, `.xml`, `.xsl`
+- **Data**: `.csv`, `.tsv`, `.sql`, `.graphql`, `.proto`
+- **Build**: `.dockerfile`, `.makefile`, `.cmake`, `.gradle`, `.sbt`
+- **Other**: `.tf`, `.hcl`, `.ipynb`, `.bib`, `.vim`, `.el`
+- **Dotfiles**: `.bashrc`, `.zshrc`, `.vimrc`, `.gitconfig`, `.tmux.conf`, `.profile`, `.editorconfig`, `.npmrc`, `.prettierrc`, `.eslintrc`, etc.
+- **Special files**: `Makefile`, `Dockerfile`, `LICENSE`, `Jenkinsfile`, `Procfile`, `Gemfile`, etc.
+- **Shebang scripts**: extensionless files starting with `#!`
 
 ### Always applies
 
-- **Skipped directories**: `.git`, `node_modules`, `__pycache__`, `.venv`, `venv`, `dist`, `build`, `.idea`, `.vscode`, `.mypy_cache`, `.pytest_cache`, etc.
+- **Skipped directories**: `.git`, `.hg`, `.svn`, `node_modules`, `__pycache__`, `.tox`, `.nox`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `venv`, `.venv`, `env`, `.env`, `.eggs`, `dist`, `build`, `.idea`, `.vscode` (plus any `*.egg-info` directory).
 - **Binary files**: Files containing null bytes are skipped automatically, even if matched by a glob pattern. No garbled PDFs or images in your context.
 - **Safety limits**: Files larger than 1MB are skipped. Maximum 500 files per loader call.
 
