@@ -6,8 +6,7 @@ import textwrap
 import pytest
 
 from llm_fragments_folder import (
-    ExtFilter,
-    _is_dotfile,
+    _compile_glob_filter,
     _is_text_file,
     _parse_argument,
     _read_file_safe,
@@ -116,21 +115,6 @@ class TestIsTextFile:
         assert _is_text_file(f) is True
 
 
-class TestIsDotfile:
-    def test_bashrc(self, tmp_path):
-        assert _is_dotfile(tmp_path / ".bashrc") is True
-
-    def test_gitconfig(self, tmp_path):
-        assert _is_dotfile(tmp_path / ".gitconfig") is True
-
-    def test_not_dotfile(self, tmp_path):
-        assert _is_dotfile(tmp_path / "main.py") is False
-
-    def test_dotfile_with_extension(self, tmp_path):
-        # .env.example has suffix .example, so it's not a "pure" dotfile
-        assert _is_dotfile(tmp_path / ".env.example") is False
-
-
 class TestShouldSkipDir:
     def test_node_modules(self):
         assert _should_skip_dir("node_modules") is True
@@ -173,6 +157,103 @@ class TestReadFileSafe:
         assert _read_file_safe(f, max_size=50) is None
 
 
+class TestCompileGlobFilter:
+    def test_single_pattern(self):
+        spec = _compile_glob_filter("*.md")
+        assert spec.match_file("README.md")
+        assert not spec.match_file("main.py")
+
+    def test_multiple_patterns(self):
+        spec = _compile_glob_filter("*.md,*.py")
+        assert spec.match_file("README.md")
+        assert spec.match_file("main.py")
+        assert not spec.match_file("config.yaml")
+
+    def test_negation(self):
+        spec = _compile_glob_filter("*.py,!*_test.py")
+        assert spec.match_file("main.py")
+        assert not spec.match_file("main_test.py")
+
+    def test_dotfile_pattern(self):
+        spec = _compile_glob_filter(".*")
+        assert spec.match_file(".bashrc")
+        assert spec.match_file(".gitconfig")
+        assert not spec.match_file("main.py")
+
+    def test_directory_negation(self):
+        spec = _compile_glob_filter("*.py,!tests/**")
+        assert spec.match_file("main.py")
+        assert spec.match_file("src/app.py")
+        assert not spec.match_file("tests/test_main.py")
+
+    def test_empty_returns_none(self):
+        assert _compile_glob_filter("") is None
+        assert _compile_glob_filter("  ,  ") is None
+
+    def test_wildcard_substring(self):
+        spec = _compile_glob_filter("*finance*")
+        assert spec.match_file("finance_report.md")
+        assert spec.match_file("q1_finance.txt")
+        assert not spec.match_file("readme.md")
+
+
+class TestParseArgument:
+    def test_empty_string(self):
+        path, gf = _parse_argument("")
+        assert path == pathlib.Path.cwd()
+        assert gf is None
+
+    def test_dot(self):
+        path, gf = _parse_argument(".")
+        assert path == pathlib.Path(".")
+        assert gf is None
+
+    def test_relative_path(self):
+        path, gf = _parse_argument("./docs")
+        assert path == pathlib.Path("./docs")
+        assert gf is None
+
+    def test_home_expansion(self):
+        path, gf = _parse_argument("~/projects")
+        assert "~" not in str(path)
+        assert gf is None
+
+    def test_glob_filter_single(self):
+        path, gf = _parse_argument("./docs?glob=*.md")
+        assert path == pathlib.Path("./docs")
+        assert gf is not None
+        assert gf.match_file("README.md")
+        assert not gf.match_file("main.py")
+
+    def test_glob_filter_multiple(self):
+        path, gf = _parse_argument(".?glob=*.py,*.js")
+        assert path == pathlib.Path(".")
+        assert gf is not None
+        assert gf.match_file("main.py")
+        assert gf.match_file("app.js")
+        assert not gf.match_file("README.md")
+
+    def test_glob_filter_no_path(self):
+        path, gf = _parse_argument("?glob=*.md")
+        assert path == pathlib.Path(".")
+        assert gf is not None
+        assert gf.match_file("README.md")
+
+    def test_glob_filter_with_negation(self):
+        path, gf = _parse_argument(".?glob=*.py,!*_test.py")
+        assert path == pathlib.Path(".")
+        assert gf is not None
+        assert gf.match_file("main.py")
+        assert not gf.match_file("main_test.py")
+
+    def test_glob_filter_dotfiles(self):
+        path, gf = _parse_argument("~?glob=.*")
+        assert "~" not in str(path)
+        assert gf is not None
+        assert gf.match_file(".bashrc")
+        assert not gf.match_file("main.py")
+
+
 class TestWalkFolder:
     def test_finds_text_files(self, sample_folder):
         files = _walk_folder(sample_folder)
@@ -211,54 +292,6 @@ class TestWalkFolder:
         with pytest.raises(ValueError, match="Not a directory"):
             _walk_folder(fake)
 
-    def test_ext_filter_only_markdown(self, sample_folder):
-        ef = ExtFilter(include={".md"})
-        files = _walk_folder(sample_folder, ext_filter=ef)
-        names = {f.name for f in files}
-        assert "README.md" in names
-        assert "guide.md" in names
-        assert "main.py" not in names
-        assert "config.yaml" not in names
-        assert "api.txt" not in names
-
-    def test_ext_filter_multiple(self, sample_folder):
-        ef = ExtFilter(include={".md", ".py"})
-        files = _walk_folder(sample_folder, ext_filter=ef)
-        names = {f.name for f in files}
-        assert "README.md" in names
-        assert "main.py" in names
-        assert "config.yaml" not in names
-
-    def test_ext_filter_no_matches(self, sample_folder):
-        ef = ExtFilter(include={".xyz"})
-        files = _walk_folder(sample_folder, ext_filter=ef)
-        assert files == []
-
-    def test_ext_filter_dotfiles_catchall(self, sample_folder):
-        ef = ExtFilter(dotfiles=True)
-        files = _walk_folder(sample_folder, ext_filter=ef)
-        names = {f.name for f in files}
-        assert ".bashrc" in names
-        assert ".gitconfig" in names
-        assert ".vimrc" in names
-        assert "README.md" not in names
-        assert "main.py" not in names
-
-    def test_ext_filter_dotfiles_combined_include(self, sample_folder):
-        ef = ExtFilter(include={".py"}, dotfiles=True)
-        files = _walk_folder(sample_folder, ext_filter=ef)
-        names = {f.name for f in files}
-        assert ".bashrc" in names
-        assert "main.py" in names
-        assert "README.md" not in names
-
-    def test_ext_filter_specific_dotfile(self, sample_folder):
-        ef = ExtFilter(include={".bashrc"})
-        files = _walk_folder(sample_folder, ext_filter=ef)
-        names = {f.name for f in files}
-        assert ".bashrc" in names
-        assert ".gitconfig" not in names
-
     def test_default_includes_known_dotfiles(self, sample_folder):
         files = _walk_folder(sample_folder)
         names = {f.name for f in files}
@@ -266,61 +299,65 @@ class TestWalkFolder:
         assert ".gitconfig" in names
         assert ".vimrc" in names
 
-    def test_exclude_filter(self, sample_folder):
-        ef = ExtFilter(exclude={".md"})
-        files = _walk_folder(sample_folder, ext_filter=ef)
+    def test_glob_only_markdown(self, sample_folder):
+        gf = _compile_glob_filter("*.md")
+        files = _walk_folder(sample_folder, glob_filter=gf)
+        names = {f.name for f in files}
+        assert "README.md" in names
+        assert "guide.md" in names
+        assert "main.py" not in names
+        assert "config.yaml" not in names
+        assert "api.txt" not in names
+
+    def test_glob_multiple_types(self, sample_folder):
+        gf = _compile_glob_filter("*.md,*.py")
+        files = _walk_folder(sample_folder, glob_filter=gf)
+        names = {f.name for f in files}
+        assert "README.md" in names
+        assert "main.py" in names
+        assert "config.yaml" not in names
+
+    def test_glob_no_matches(self, sample_folder):
+        gf = _compile_glob_filter("*.xyz")
+        files = _walk_folder(sample_folder, glob_filter=gf)
+        assert files == []
+
+    def test_glob_dotfiles(self, sample_folder):
+        gf = _compile_glob_filter(".*")
+        files = _walk_folder(sample_folder, glob_filter=gf)
+        names = {f.name for f in files}
+        assert ".bashrc" in names
+        assert ".gitconfig" in names
+        assert ".vimrc" in names
+        assert "README.md" not in names
+        assert "main.py" not in names
+
+    def test_glob_with_negation(self, sample_folder):
+        gf = _compile_glob_filter("*.md,*.py,*.yaml,*.txt,!*.md")
+        files = _walk_folder(sample_folder, glob_filter=gf)
         names = {f.name for f in files}
         assert "README.md" not in names
         assert "guide.md" not in names
         assert "main.py" in names
         assert "config.yaml" in names
-        assert ".bashrc" in names
-
-    def test_exclude_multiple(self, sample_folder):
-        ef = ExtFilter(exclude={".md", ".yaml"})
-        files = _walk_folder(sample_folder, ext_filter=ef)
-        names = {f.name for f in files}
-        assert "README.md" not in names
-        assert "config.yaml" not in names
-        assert "main.py" in names
         assert "api.txt" in names
 
-    def test_exclude_with_force_include(self, sample_folder):
-        # Create a custom extension file
-        (sample_folder / "data.custom").write_text("custom data")
-        ef = ExtFilter(exclude={".md"}, force_include={".custom"})
-        files = _walk_folder(sample_folder, ext_filter=ef)
+    def test_glob_exclude_directory(self, sample_folder):
+        gf = _compile_glob_filter("*.md,!docs/**")
+        files = _walk_folder(sample_folder, glob_filter=gf)
         names = {f.name for f in files}
-        assert "README.md" not in names
-        assert "data.custom" in names
-        assert "main.py" in names
-
-    def test_force_include_custom_extension(self, sample_folder):
-        (sample_folder / "data.xyz").write_text("custom data")
-        ef = ExtFilter(include={".py"}, force_include={".xyz"})
-        files = _walk_folder(sample_folder, ext_filter=ef)
-        names = {f.name for f in files}
-        assert "main.py" in names
-        assert "data.xyz" in names
-        assert "README.md" not in names
-
-    def test_exclude_dotfiles(self, sample_folder):
-        ef = ExtFilter(exclude_dotfiles=True)
-        files = _walk_folder(sample_folder, ext_filter=ef)
-        names = {f.name for f in files}
-        assert ".bashrc" not in names
-        assert ".gitconfig" not in names
-        assert ".vimrc" not in names
         assert "README.md" in names
-        assert "main.py" in names
+        assert "guide.md" not in names
 
-    def test_exclude_with_dotfiles(self, sample_folder):
-        ef = ExtFilter(exclude={".md"}, dotfiles=True)
-        files = _walk_folder(sample_folder, ext_filter=ef)
+    def test_glob_binary_files_skipped_by_read(self, sample_folder):
+        """Binary files matched by glob are still skipped by _read_file_safe."""
+        (sample_folder / "data.bin").write_bytes(b"\x00\x01\x02\x03")
+        gf = _compile_glob_filter("*.bin,*.md")
+        files = _walk_folder(sample_folder, glob_filter=gf)
         names = {f.name for f in files}
-        assert "README.md" not in names
-        assert ".bashrc" in names
-        assert "main.py" in names
+        # .bin is matched by the glob filter (it passes _walk_folder)
+        assert "data.bin" in names
+        # But _read_file_safe will skip it due to null bytes (tested via loader)
 
     def test_gitignore_respected(self, git_project):
         files = _walk_folder(git_project, respect_gitignore=True)
@@ -333,112 +370,10 @@ class TestWalkFolder:
         assert "bundle.js" not in names
 
 
-class TestParseArgument:
-    def test_empty_string(self):
-        path, ef = _parse_argument("")
-        assert path == pathlib.Path.cwd()
-        assert ef is None
-
-    def test_dot(self):
-        path, ef = _parse_argument(".")
-        assert path == pathlib.Path(".")
-        assert ef is None
-
-    def test_relative_path(self):
-        path, ef = _parse_argument("./docs")
-        assert path == pathlib.Path("./docs")
-        assert ef is None
-
-    def test_home_expansion(self):
-        path, ef = _parse_argument("~/projects")
-        assert "~" not in str(path)
-        assert ef is None
-
-    def test_ext_filter_include(self):
-        path, ef = _parse_argument("./docs?ext=md,txt")
-        assert path == pathlib.Path("./docs")
-        assert ef is not None
-        assert ef.include == {".md", ".txt"}
-        assert ef.exclude == set()
-
-    def test_ext_filter_with_dots(self):
-        path, ef = _parse_argument(".?ext=.py,.js")
-        assert path == pathlib.Path(".")
-        assert ef is not None
-        assert ef.include == {".py", ".js"}
-
-    def test_ext_filter_no_path(self):
-        path, ef = _parse_argument("?ext=md")
-        assert path == pathlib.Path(".")
-        assert ef is not None
-        assert ef.include == {".md"}
-
-    def test_ext_filter_dotfiles_keyword(self):
-        path, ef = _parse_argument(".?ext=dotfiles")
-        assert path == pathlib.Path(".")
-        assert ef is not None
-        assert ef.dotfiles is True
-        assert ef.include == set()
-
-    def test_ext_filter_dotfiles_combined(self):
-        path, ef = _parse_argument("./src?ext=dotfiles,py,md")
-        assert path == pathlib.Path("./src")
-        assert ef is not None
-        assert ef.dotfiles is True
-        assert ef.include == {".py", ".md"}
-
-    def test_ext_filter_exclude(self):
-        path, ef = _parse_argument(".?ext=!md,!txt")
-        assert path == pathlib.Path(".")
-        assert ef is not None
-        assert ef.exclude == {".md", ".txt"}
-        assert ef.include == set()
-        assert ef.is_exclude_mode is True
-
-    def test_ext_filter_exclude_with_force_include(self):
-        path, ef = _parse_argument(".?ext=!md,+custom")
-        assert path == pathlib.Path(".")
-        assert ef is not None
-        assert ef.exclude == {".md"}
-        assert ef.force_include == {".custom"}
-        assert ef.is_exclude_mode is True
-
-    def test_ext_filter_mixed(self):
-        path, ef = _parse_argument(".?ext=!md,+xyz,+dotfiles")
-        assert path == pathlib.Path(".")
-        assert ef is not None
-        assert ef.exclude == {".md"}
-        assert ef.force_include == {".xyz"}
-        assert ef.dotfiles is True
-
-    def test_ext_filter_plus_dotfiles(self):
-        path, ef = _parse_argument(".?ext=!md,+dotfiles")
-        assert path == pathlib.Path(".")
-        assert ef is not None
-        assert ef.exclude == {".md"}
-        assert ef.dotfiles is True
-        assert ef.is_exclude_mode is True
-
-    def test_ext_filter_exclude_dotfiles(self):
-        path, ef = _parse_argument(".?ext=!dotfiles,+dat")
-        assert path == pathlib.Path(".")
-        assert ef is not None
-        assert ef.exclude_dotfiles is True
-        assert ef.force_include == {".dat"}
-        assert ef.is_exclude_mode is True
-
-    def test_ext_filter_bare_dotfiles_still_works(self):
-        path, ef = _parse_argument(".?ext=dotfiles")
-        assert path == pathlib.Path(".")
-        assert ef is not None
-        assert ef.dotfiles is True
-
-
 class TestFolderLoader:
     def test_loads_fragments(self, sample_folder):
         fragments = folder_loader(str(sample_folder))
         assert len(fragments) >= 3
-        # Fragment is a string subclass, so check directly
         assert any("My Project" in str(f) for f in fragments)
         assert any("print('hello')" in str(f) for f in fragments)
 
@@ -452,26 +387,20 @@ class TestFolderLoader:
         with pytest.raises(ValueError, match="not a directory"):
             folder_loader("/nonexistent/path/that/doesnt/exist")
 
-    def test_ext_filter(self, sample_folder):
-        fragments = folder_loader(f"{sample_folder}?ext=md")
+    def test_glob_filter(self, sample_folder):
+        fragments = folder_loader(f"{sample_folder}?glob=*.md")
         assert all("---" in str(f) for f in fragments)
-        # Should only have .md files
         assert any("My Project" in str(f) for f in fragments)
         assert not any("print('hello')" in str(f) for f in fragments)
 
-    def test_exclude_filter(self, sample_folder):
-        fragments = folder_loader(f"{sample_folder}?ext=!md")
-        # Should not have any .md content
+    def test_glob_exclude(self, sample_folder):
+        fragments = folder_loader(f"{sample_folder}?glob=*.py,*.yaml,*.txt,.*")
         assert not any("My Project" in str(f) for f in fragments)
-        assert not any("Guide" in str(f) for f in fragments)
-        # Should have other text files
         assert any("print('hello')" in str(f) for f in fragments)
 
     def test_binary_files_skipped_in_output(self, sample_folder):
-        # Create a file with null bytes (actual binary content)
         (sample_folder / "data.bin").write_bytes(b"\x00\x01\x02\x03")
-        fragments = folder_loader(f"{sample_folder}?ext=+bin,md")
-        # .bin should be walked but skipped by _read_file_safe due to null bytes
+        fragments = folder_loader(f"{sample_folder}?glob=*.bin,*.md")
         contents = [str(f) for f in fragments]
         assert not any("data.bin" in c for c in contents)
         assert any("My Project" in c for c in contents)
@@ -480,12 +409,10 @@ class TestFolderLoader:
 class TestProjectLoader:
     def test_includes_file_tree(self, sample_folder):
         fragments = project_loader(str(sample_folder))
-        # First fragment should be the file tree
         assert "FILE_TREE" in fragments[0].source
         assert sample_folder.name in str(fragments[0])
 
     def test_loads_file_contents(self, sample_folder):
         fragments = project_loader(str(sample_folder))
-        # Should have tree + file fragments
         assert len(fragments) >= 4  # tree + at least 3 files
         assert any("My Project" in str(f) for f in fragments[1:])

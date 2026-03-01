@@ -35,8 +35,8 @@ llm -f folder:~/notes -m claude-sonnet-4-5 "Find all action items"
 llm -f folder:./research --sf "You are a research assistant" "Summarize the key findings"
 
 # Only load specific file types
-llm -f "folder:./docs?ext=md,txt" "Summarize the docs"
-llm -f "folder:.?ext=json,yaml" "Explain these configs"
+llm -f "folder:./docs?glob=*.md,*.txt" "Summarize the docs"
+llm -f "folder:.?glob=*.json,*.yaml" "Explain these configs"
 ```
 
 ### project: - Load a software project (respects .gitignore)
@@ -55,7 +55,7 @@ llm -f project:. "Review this code for security issues"
 llm -f project:~/repos/my-api -m claude-sonnet-4-5 "Describe the architecture"
 
 # Only Python files
-llm -f "project:.?ext=py" "Review this code"
+llm -f "project:.?glob=*.py" "Review this code"
 ```
 
 The `project:` loader:
@@ -96,65 +96,32 @@ llm -f project:. -f issue:user/repo/42 "Implement this feature"
 
 **Always skipped directories**: `.git`, `node_modules`, `__pycache__`, `.venv`, `venv`, `dist`, `build`, `.idea`, `.vscode`, `.mypy_cache`, `.pytest_cache`, etc.
 
-### Filtering by extension
+### Filtering with glob patterns
 
-Use `?ext=` to control which file types are loaded. Extensions can be specified with or without the leading dot (`md` and `.md` both work). Multiple extensions are comma-separated.
-
-#### Include only (default)
+Use `?glob=` to filter files using gitignore-style glob patterns. Patterns are comma-separated and support negation with `!`.
 
 ```bash
-llm -f "folder:./src?ext=py,js,ts" "Review this code"
-llm -f "project:.?ext=md,txt" "Summarize the documentation"
+# Only markdown files
+llm -f "folder:./docs?glob=*.md" "Summarize these"
+
+# Python files, excluding tests
+llm -f "project:.?glob=*.py,!*_test.py,!tests/**" "Review the code"
+
+# All dotfiles
+llm -f "folder:~?glob=.*" "Explain my shell config"
+
+# Multiple file types
+llm -f "folder:.?glob=*.md,*.txt,*.json" "What's in here?"
+
+# Files containing a keyword, excluding a type
+llm -f "folder:.?glob=*finance*,!*.txt" "Summarize the finance docs"
 ```
 
-#### Exclude with `!`
+When `?glob=` is specified, it replaces the default text file detection entirely. Only files matching the glob patterns are included (binary files with null bytes are still skipped automatically).
 
-Prefix extensions with `!` to exclude them (everything else is included):
+When no `?glob=` is specified, the default text file detection is used (extension and filename based).
 
-```bash
-# Everything except markdown
-llm -f "folder:.?ext=!md" "Review the non-docs files"
-
-# Everything except markdown and text
-llm -f "project:.?ext=!md,!txt" "Focus on the code"
-```
-
-#### Force-include with `+`
-
-Use `+` to force-include custom or non-standard extensions:
-
-```bash
-# Exclude markdown, but include a custom extension
-llm -f "folder:.?ext=!md,+custom" "Review these files"
-
-# Include only Python and a bespoke file type
-llm -f "folder:.?ext=py,+myformat" "Analyze these"
-```
-
-#### Dotfiles
-
-Use `+dotfiles` to include all dotfiles, or `!dotfiles` to exclude them. The `+` prefix keeps the syntax consistent with other extensions:
-
-```bash
-# Load all dotfiles
-llm -f "folder:~?ext=+dotfiles" "Explain my shell config"
-
-# Combine dotfiles with other extensions
-llm -f "folder:~?ext=+dotfiles,md" "Summarize my config and docs"
-
-# Exclude markdown but include all dotfiles
-llm -f "folder:.?ext=!md,+dotfiles" "Review configs and code"
-
-# Exclude all dotfiles from results
-llm -f "folder:.?ext=!dotfiles" "Skip config files"
-
-# Target a specific dotfile by name
-llm -f "folder:~?ext=.bashrc,.zshrc" "Compare these shell configs"
-```
-
-> **Note:** `dotfiles` is a special keyword. If you have a file literally named `.dotfiles`, it will be matched by the `+dotfiles` catch-all (since it is itself a dotfile). To target it specifically, use `?ext=.dotfiles`.
-
-**Binary file detection**: Files containing null bytes are automatically detected as binary and skipped, even if force-included via `+`. This prevents garbled output from PDFs, images, Word docs, etc.
+**Binary file detection**: Files containing null bytes are automatically detected as binary and skipped, even if matched by a glob pattern. This prevents garbled output from PDFs, images, Word docs, etc.
 
 **Safety limits**: Files larger than 1MB are skipped. Maximum 500 files per loader call.
 

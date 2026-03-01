@@ -12,7 +12,6 @@ import logging
 import os
 import pathlib
 import subprocess
-from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any
 
@@ -264,61 +263,26 @@ def _get_git_tracked_files(root: pathlib.Path) -> set[str] | None:
     return None
 
 
-def _matches_ext_filter(filepath: pathlib.Path, ef: ExtFilter) -> bool:
-    """Check if a file matches the extension filter."""
-    suffix = filepath.suffix.lower()
-    is_dot = _is_dotfile(filepath)
-    name_lower = filepath.name.lower()
-
-    if ef.is_exclude_mode:
-        # Exclude mode: start with default text detection, then apply filters
-        # Check if excluded by extension or dotfile name
-        if suffix and suffix in ef.exclude:
-            return False
-        if is_dot and name_lower in ef.exclude:
-            return False
-        if ef.exclude_dotfiles and is_dot:
-            return False
-
-        # Force-included extensions always match
-        if suffix and suffix in ef.force_include:
-            return True
-        if is_dot and name_lower in ef.force_include:
-            return True
-
-        # Dotfiles catch-all
-        if ef.dotfiles and is_dot:
-            return True
-
-        # Fall back to default text detection
-        return _is_text_file(filepath)
-
-    # Include mode: only match specified extensions
-    if suffix and suffix in ef.include:
-        return True
-    if is_dot and name_lower in ef.include:
-        return True
-
-    # Force-included extensions
-    if suffix and suffix in ef.force_include:
-        return True
-    if is_dot and name_lower in ef.force_include:
-        return True
-
-    # Dotfiles catch-all
-    return bool(ef.dotfiles and is_dot)
+def _compile_glob_filter(glob_param: str) -> Any:
+    """Compile a comma-separated glob pattern string into a pathspec matcher."""
+    if pathspec is None:
+        raise ValueError("pathspec library is required for ?glob= filtering")
+    patterns = [p.strip() for p in glob_param.split(",") if p.strip()]
+    if not patterns:
+        return None
+    return pathspec.PathSpec.from_lines("gitignore", patterns)
 
 
 def _walk_folder(
     root: pathlib.Path,
     respect_gitignore: bool = False,
     max_files: int = 500,
-    ext_filter: ExtFilter | None = None,
+    glob_filter: Any = None,
 ) -> list[pathlib.Path]:
     """Walk a folder and return a list of text file paths.
 
-    If ext_filter is provided, files are matched against the filter rules
-    (include, exclude, force-include, dotfiles).
+    If glob_filter is provided (a compiled pathspec.PathSpec), files are matched
+    against the glob patterns instead of default text file detection.
     """
     root = root.resolve()
     if not root.is_dir():
@@ -352,9 +316,9 @@ def _walk_folder(
             elif gitignore_spec is not None and gitignore_spec.match_file(rel_str):
                 continue
 
-            # Extension filter or default text detection
-            if ext_filter is not None:
-                if not _matches_ext_filter(filepath, ext_filter):
+            # Glob filter or default text detection
+            if glob_filter is not None:
+                if not glob_filter.match_file(rel_str):
                     continue
             elif not _is_text_file(filepath):
                 continue
@@ -385,78 +349,32 @@ def _build_fragments(
     return fragments
 
 
-def _is_dotfile(path: pathlib.Path) -> bool:
-    """Check if a file is a dotfile (name starts with '.' and has no real extension)."""
-    return path.name.startswith(".") and path.suffix == ""
+def _parse_argument(argument: str) -> tuple[pathlib.Path, Any]:
+    """Parse the argument string into a Path and optional glob filter.
 
+    Supports glob filtering:
+      ?glob=*.md,*.txt        Include only markdown and text files
+      ?glob=*.py,!*_test.py   Python files, excluding tests
+      ?glob=.*                All dotfiles
+      ?glob=*finance*,!*.txt  Files containing "finance", excluding .txt
 
-@dataclass
-class ExtFilter:
-    """Parsed extension filter supporting include, exclude, and force-include modes.
-
-    Modes:
-      - include only: ext=md,py → only these extensions
-      - exclude only: ext=!md,!txt → all text files except these
-      - mixed: ext=!md,+custom → all text files except .md, plus .custom
-      - dotfiles: ext=+dotfiles → include all dotfiles
-      - dotfiles: ext=!dotfiles → exclude all dotfiles
-      - bare dotfiles also works: ext=dotfiles (same as +dotfiles)
-    """
-
-    include: set[str] = field(default_factory=set)
-    exclude: set[str] = field(default_factory=set)
-    force_include: set[str] = field(default_factory=set)
-    dotfiles: bool = False
-    exclude_dotfiles: bool = False
-
-    @property
-    def is_exclude_mode(self) -> bool:
-        """True if using exclusion (possibly with force-includes)."""
-        return len(self.exclude) > 0 or self.exclude_dotfiles
-
-
-def _parse_argument(argument: str) -> tuple[pathlib.Path, ExtFilter | None]:
-    """Parse the argument string into a Path and optional extension filter.
-
-    Supports several filter syntaxes:
-      ?ext=md,txt,py       Include only these extensions
-      ?ext=!md,!txt        Exclude these extensions (include everything else)
-      ?ext=!md,+custom     Exclude .md, force-include .custom files
-      ?ext=+dotfiles       Include all dotfiles (dotfiles also works)
-      ?ext=!dotfiles       Exclude all dotfiles
-      ?ext=!md,+dotfiles   Exclude .md, include all dotfiles
-
-    Returns (path, ExtFilter) where ExtFilter is None if no filter.
+    Returns (path, glob_filter) where glob_filter is a compiled pathspec
+    matcher or None if no filter specified.
     """
     if not argument or argument.strip() == "":
         return pathlib.Path.cwd(), None
 
     path_str = argument
 
-    if "?ext=" not in argument:
+    if "?glob=" not in argument:
         return pathlib.Path(path_str).expanduser(), None
 
-    path_str, _, ext_part = argument.partition("?ext=")
+    path_str, _, glob_part = argument.partition("?glob=")
     if not path_str:
         path_str = "."
 
-    ef = ExtFilter()
-    for e in ext_part.split(","):
-        e = e.strip().lower()
-        if not e:
-            continue
-        if e in ("dotfiles", "+dotfiles"):
-            ef.dotfiles = True
-        elif e == "!dotfiles":
-            ef.exclude_dotfiles = True
-        elif e.startswith("!"):
-            ef.exclude.add("." + e[1:].lstrip("."))
-        elif e.startswith("+"):
-            ef.force_include.add("." + e[1:].lstrip("."))
-        else:
-            ef.include.add("." + e.lstrip("."))
-
-    return pathlib.Path(path_str).expanduser(), ef
+    glob_filter = _compile_glob_filter(glob_part)
+    return pathlib.Path(path_str).expanduser(), glob_filter
 
 
 @llm.hookimpl
@@ -473,26 +391,25 @@ def folder_loader(argument: str) -> list[llm.Fragment]:
     Usage: llm -f folder:./docs "Summarize these documents"
            llm -f folder:. "What is this about?"
            llm -f folder:~/notes "Find action items"
-           llm -f "folder:./docs?ext=md,txt" "Summarize the docs"
-           llm -f "folder:.?ext=!md" "Everything except markdown"
-           llm -f "folder:.?ext=!md,+custom" "Exclude md, include .custom"
+           llm -f "folder:./docs?glob=*.md,*.txt" "Summarize the docs"
+           llm -f "folder:.?glob=*.py,!*_test.py" "Review non-test Python"
+           llm -f "folder:~?glob=.*" "Show all dotfiles"
 
     Recursively walks the directory, loading all recognized text files.
     Skips common non-text directories (node_modules, .git, __pycache__, etc.)
     and binary files (detected via null bytes). Each file becomes a separate
     fragment.
 
-    Filter syntax:
-      ?ext=md,py        Include only these extensions
-      ?ext=!md,!txt     Exclude these (include everything else)
-      ?ext=!md,+custom  Exclude .md, force-include .custom
-      ?ext=+dotfiles    All dotfiles (.bashrc, .gitconfig, etc.)
-      ?ext=!dotfiles    Exclude all dotfiles
+    Filter syntax (gitignore-style glob patterns):
+      ?glob=*.md,*.txt        Include only these file types
+      ?glob=*.py,!*_test.py   Include Python, exclude test files
+      ?glob=.*                All dotfiles
+      ?glob=*finance*,!*.txt  Files with "finance", excluding .txt
     """
-    root, ext_filter = _parse_argument(argument)
+    root, glob_filter = _parse_argument(argument)
     if not root.is_dir():
         raise ValueError(f"folder:{argument} - '{root}' is not a directory")
-    files = _walk_folder(root, respect_gitignore=False, ext_filter=ext_filter)
+    files = _walk_folder(root, respect_gitignore=False, glob_filter=glob_filter)
     if not files:
         raise ValueError(f"folder:{argument} - no text files found in '{root}'")
     return _build_fragments(root, files, "folder")
@@ -505,24 +422,22 @@ def project_loader(argument: str) -> list[llm.Fragment]:
     Usage: llm -f project:. "Explain this codebase"
            llm -f project:./my-app "What does this project do?"
            llm chat -f project:.
-           llm -f "project:.?ext=py,js" "Review the code"
+           llm -f "project:.?glob=*.py,*.js" "Review the code"
 
     Like folder: but designed for software projects. Uses git ls-files
     when inside a git repo (the most accurate approach), otherwise falls
     back to parsing .gitignore patterns. Prepends a file tree summary as
     the first fragment for project context.
 
-    Filter syntax:
-      ?ext=py,js        Include only these extensions
-      ?ext=!md,!txt     Exclude these (include everything else)
-      ?ext=!md,+custom  Exclude .md, force-include .custom
-      ?ext=+dotfiles    All dotfiles (.bashrc, .gitconfig, etc.)
-      ?ext=!dotfiles    Exclude all dotfiles
+    Filter syntax (gitignore-style glob patterns):
+      ?glob=*.py,*.js         Include only these file types
+      ?glob=*.py,!tests/**    Python files, skip tests directory
+      ?glob=*.md,*.txt        Documentation files only
     """
-    root, ext_filter = _parse_argument(argument)
+    root, glob_filter = _parse_argument(argument)
     if not root.is_dir():
         raise ValueError(f"project:{argument} - '{root}' is not a directory")
-    files = _walk_folder(root, respect_gitignore=True, ext_filter=ext_filter)
+    files = _walk_folder(root, respect_gitignore=True, glob_filter=glob_filter)
     if not files:
         raise ValueError(f"project:{argument} - no text files found in '{root}'")
 
