@@ -83,22 +83,9 @@ llm -f project:. -f issue:user/repo/42 "Implement this feature"
 
 ## What gets loaded
 
-**Text file detection** is based on file extension and filename. Supported types include:
+### With `?glob=` — you choose
 
-- Documents: `.md`, `.qmd`, `.txt`, `.rst`, `.adoc`, `.tex`, `.org`
-- Code: `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.rb`, `.c`, `.cpp`, and many more
-- Config: `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.env`, `.cfg`
-- Web: `.html`, `.css`, `.scss`, `.svg`, `.xml`
-- Data: `.csv`, `.tsv`, `.sql`, `.graphql`
-- Dotfiles: `.bashrc`, `.zshrc`, `.vimrc`, `.gitconfig`, `.tmux.conf`, `.profile`, `.npmrc`, etc.
-- Special files: `Makefile`, `Dockerfile`, `LICENSE`, etc.
-- Shebang scripts: extensionless files starting with `#!`
-
-**Always skipped directories**: `.git`, `node_modules`, `__pycache__`, `.venv`, `venv`, `dist`, `build`, `.idea`, `.vscode`, `.mypy_cache`, `.pytest_cache`, etc.
-
-### Filtering with glob patterns
-
-Use `?glob=` to filter files using gitignore-style glob patterns. Patterns are comma-separated and support negation with `!`.
+When you specify `?glob=`, only files matching your patterns are included. Use gitignore-style glob patterns, comma-separated. Negate with `!`.
 
 ```bash
 # Only markdown files
@@ -117,13 +104,15 @@ llm -f "folder:.?glob=*.md,*.txt,*.json" "What's in here?"
 llm -f "folder:.?glob=*finance*,!*.txt" "Summarize the finance docs"
 ```
 
-When `?glob=` is specified, it replaces the default text file detection entirely. Only files matching the glob patterns are included (binary files with null bytes are still skipped automatically).
+### Without `?glob=` — sensible defaults
 
-When no `?glob=` is specified, the default text file detection is used (extension and filename based).
+Without a filter, files are included based on extension and filename: `.py`, `.md`, `.json`, `.yaml`, `.ts`, `.go`, `.rs`, `.c`, `.cpp`, common dotfiles (`.bashrc`, `.gitconfig`, `.vimrc`, etc.), special files (`Makefile`, `Dockerfile`, `LICENSE`), and extensionless scripts starting with `#!`.
 
-**Binary file detection**: Files containing null bytes are automatically detected as binary and skipped, even if matched by a glob pattern. This prevents garbled output from PDFs, images, Word docs, etc.
+### Always applies
 
-**Safety limits**: Files larger than 1MB are skipped. Maximum 500 files per loader call.
+- **Skipped directories**: `.git`, `node_modules`, `__pycache__`, `.venv`, `venv`, `dist`, `build`, `.idea`, `.vscode`, `.mypy_cache`, `.pytest_cache`, etc.
+- **Binary files**: Files containing null bytes are skipped automatically, even if matched by a glob pattern. No garbled PDFs or images in your context.
+- **Safety limits**: Files larger than 1MB are skipped. Maximum 500 files per loader call.
 
 ## How it works
 
