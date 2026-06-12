@@ -1,6 +1,6 @@
 [project]
 name = "llm-fragments-folder"
-version = "0.4.1"
+version = "0.5.0"
 description = "LLM plugin to load entire folder contents as fragments"
 readme = "README.md"
 authors = [{name = "Michael Borck"}]
@@ -8,7 +8,7 @@ license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 dependencies = ["llm>=0.24", "pathspec"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Environment :: Console",

@@ -65,9 +65,9 @@ llm -f "project:.?glob=*.py" "Review this code"
 The `project:` loader:
 
 - Uses `git ls-files` when inside a git repo (most accurate)
-- Falls back to parsing `.gitignore` patterns if git is not available
+- Falls back to parsing `.gitignore` patterns (including nested `.gitignore` files) if git is not available
 - Prepends a file tree summary as the first fragment
-- Automatically skips `node_modules`, `__pycache__`, `.git`, `venv`, `dist`, `build`, etc.
+- Automatically skips `node_modules`, `__pycache__`, `.git`, `venv`, `dist`, `build`, etc. — unless git explicitly tracks files inside them (e.g. a committed `.vscode/settings.json`)
 
 ### Combining with other fragments
 
@@ -114,7 +114,7 @@ Without a filter, only files with recognized extensions and filenames are includ
 
 - **Documents**: `.md`, `.qmd`, `.txt`, `.rst`, `.adoc`, `.tex`, `.org`
 - **Code**: `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.go`, `.rs`, `.java`, `.rb`, `.c`, `.cpp`, `.h`, `.cs`, `.swift`, `.kt`, `.scala`, `.r`, `.jl`, `.lua`, `.pl`, `.php`, `.sh`, `.bash`, `.zsh`, `.fish`, `.ps1`, `.bat`
-- **Config**: `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.conf`, `.env`, `.properties`
+- **Config**: `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.conf`, `.properties`
 - **Web**: `.html`, `.css`, `.scss`, `.sass`, `.less`, `.svg`, `.xml`, `.xsl`
 - **Data**: `.csv`, `.tsv`, `.sql`, `.graphql`, `.proto`
 - **Build**: `.dockerfile`, `.makefile`, `.cmake`, `.gradle`, `.sbt`
@@ -125,9 +125,16 @@ Without a filter, only files with recognized extensions and filenames are includ
 
 ### Always applies
 
-- **Skipped directories**: `.git`, `.hg`, `.svn`, `node_modules`, `__pycache__`, `.tox`, `.nox`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `venv`, `.venv`, `env`, `.env`, `.eggs`, `dist`, `build`, `.idea`, `.vscode` (plus any `*.egg-info` directory).
+- **Sensitive files are never loaded**, even when matched by a `?glob=` pattern or tracked by git. Remember that fragment contents are sent to your LLM provider *and* stored in LLM's local log database, so the loaders refuse:
+  - Credential directories: `.ssh`, `.gnupg`, `.aws`, `.kube`, `.docker`, `.gcloud`, `.azure`
+  - Credential files: `.netrc`, `.pgpass`, `.env`, `.env.*`, `*.env` (templates like `.env.example` are still allowed)
+  - Key material: `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`
+
+  This makes commands like `llm -f "folder:~?glob=.*"` safe to run on your home directory. It is a best-effort denylist, not a guarantee — secrets in unconventionally named files will still be loaded, so check what you're pointing the loader at.
+- **Skipped directories**: `.git`, `.hg`, `.svn`, `node_modules`, `__pycache__`, `.tox`, `.nox`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `venv`, `.venv`, `env`, `.env`, `.eggs`, `dist`, `build`, `.idea`, `.vscode` (plus any `*.egg-info` directory). With `project:`, git-tracked files inside these directories are still included.
+- **Symlinks** pointing outside the loaded directory tree are skipped.
 - **Binary files**: Files containing null bytes are skipped automatically, even if matched by a glob pattern. No garbled PDFs or images in your context.
-- **Safety limits**: Files larger than 1MB are skipped. Maximum 500 files per loader call.
+- **Safety limits**: Files larger than 1MB are skipped. Maximum 500 files per loader call. When a limit is hit, a warning is logged and the `project:` file tree notes that the listing may be incomplete.
 
 ## How it works
 

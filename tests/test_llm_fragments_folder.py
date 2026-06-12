@@ -1,12 +1,17 @@
 """Tests for llm-fragments-folder plugin."""
 
+import logging
 import pathlib
+import shutil
+import subprocess
 import textwrap
 
 import pytest
 
+import llm_fragments_folder
 from llm_fragments_folder import (
     _compile_glob_filter,
+    _is_sensitive_file,
     _is_text_file,
     _parse_argument,
     _read_file_safe,
@@ -15,6 +20,18 @@ from llm_fragments_folder import (
     folder_loader,
     project_loader,
 )
+
+requires_git = pytest.mark.skipif(
+    shutil.which("git") is None, reason="git not available"
+)
+
+
+@pytest.fixture
+def no_git(monkeypatch):
+    """Force the .gitignore-parsing fallback path regardless of environment."""
+    monkeypatch.setattr(
+        llm_fragments_folder, "_get_git_tracked_files", lambda root: None
+    )
 
 
 @pytest.fixture
@@ -53,14 +70,16 @@ def sample_folder(tmp_path):
 
 @pytest.fixture
 def git_project(tmp_path):
-    """Create a sample project with .gitignore."""
+    """Create a sample project with .gitignore (no git repo)."""
     (tmp_path / "README.md").write_text("# Project")
     (tmp_path / "app.py").write_text("import flask")
     (tmp_path / "secret.env").write_text("API_KEY=xxx")
+    (tmp_path / "ignored.md").write_text("should not appear")
 
     (tmp_path / ".gitignore").write_text(
         textwrap.dedent("""\
         *.env
+        ignored.md
         __pycache__/
         dist/
         """)
@@ -70,6 +89,26 @@ def git_project(tmp_path):
     dist.mkdir()
     (dist / "bundle.js").write_text("minified code")
 
+    return tmp_path
+
+
+@pytest.fixture
+def git_repo(tmp_path):
+    """Create a real git repository exercising the git ls-files path."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "README.md").write_text("# Repo")
+    (tmp_path / "über.md").write_text("unicode filename")
+    vscode = tmp_path / ".vscode"
+    vscode.mkdir()
+    (vscode / "settings.json").write_text("{}")
+    (tmp_path / ".gitignore").write_text("ignored.md\n")
+    subprocess.run(
+        ["git", "add", "README.md", "über.md", ".vscode", ".gitignore"],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "untracked.md").write_text("untracked but not ignored")
+    (tmp_path / "ignored.md").write_text("gitignored")
     return tmp_path
 
 
@@ -359,15 +398,164 @@ class TestWalkFolder:
         assert "data.bin" in names
         # But _read_file_safe will skip it due to null bytes (tested via loader)
 
-    def test_gitignore_respected(self, git_project):
+    def test_gitignore_respected(self, git_project, no_git):
         files = _walk_folder(git_project, respect_gitignore=True)
         names = {f.name for f in files}
         assert "README.md" in names
         assert "app.py" in names
-        # .env files should be ignored by .gitignore
+        # ignored.md should be excluded by .gitignore
+        assert "ignored.md" not in names
+        # .env files are excluded by the sensitive-file check
         assert "secret.env" not in names
         # dist/ should be ignored
         assert "bundle.js" not in names
+
+    def test_nested_gitignore_respected(self, tmp_path, no_git):
+        (tmp_path / ".gitignore").write_text("top_ignored.md\n")
+        (tmp_path / "top_ignored.md").write_text("x")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / ".gitignore").write_text("sub_ignored.md\n")
+        (sub / "sub_ignored.md").write_text("x")
+        (sub / "kept.md").write_text("x")
+        files = _walk_folder(tmp_path, respect_gitignore=True)
+        names = {f.name for f in files}
+        assert "kept.md" in names
+        assert "top_ignored.md" not in names
+        assert "sub_ignored.md" not in names
+
+    def test_max_files_warning(self, sample_folder, caplog):
+        with caplog.at_level(logging.WARNING):
+            _walk_folder(sample_folder, max_files=2)
+        assert "File limit" in caplog.text
+
+    def test_symlink_outside_root_skipped(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.md").write_text("outside the tree")
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "inside.md").write_text("inside")
+        (root / "link.md").symlink_to(outside / "secret.md")
+        files = _walk_folder(root)
+        names = {f.name for f in files}
+        assert "inside.md" in names
+        assert "link.md" not in names
+
+    def test_symlink_inside_root_kept(self, tmp_path):
+        (tmp_path / "real.md").write_text("content")
+        (tmp_path / "alias.md").symlink_to(tmp_path / "real.md")
+        files = _walk_folder(tmp_path)
+        names = {f.name for f in files}
+        assert "alias.md" in names
+
+
+@requires_git
+class TestGitLsFilesPath:
+    def test_unicode_filename_included(self, git_repo):
+        files = _walk_folder(git_repo, respect_gitignore=True)
+        names = {f.name for f in files}
+        assert "über.md" in names
+
+    def test_tracked_skip_dir_included(self, git_repo):
+        # .vscode is in SKIP_DIRS but its files are tracked by git
+        files = _walk_folder(git_repo, respect_gitignore=True)
+        names = {f.name for f in files}
+        assert "settings.json" in names
+
+    def test_untracked_included_ignored_excluded(self, git_repo):
+        files = _walk_folder(git_repo, respect_gitignore=True)
+        names = {f.name for f in files}
+        assert "untracked.md" in names
+        assert "ignored.md" not in names
+
+    def test_untracked_skip_dir_pruned(self, git_repo):
+        node_modules = git_repo / "node_modules"
+        node_modules.mkdir()
+        (node_modules / "index.js").write_text("module.exports = {}")
+        files = _walk_folder(git_repo, respect_gitignore=True)
+        names = {f.name for f in files}
+        assert "index.js" not in names
+
+    def test_ignored_folder_falls_back(self, git_repo):
+        # A folder ignored by an enclosing repo yields no git files;
+        # the loader should fall back rather than report nothing
+        (git_repo / ".gitignore").write_text("data/\n")
+        data = git_repo / "data"
+        data.mkdir()
+        (data / "notes.md").write_text("notes")
+        files = _walk_folder(data, respect_gitignore=True)
+        names = {f.name for f in files}
+        assert "notes.md" in names
+
+
+class TestSensitiveFiles:
+    def test_is_sensitive_file(self):
+        assert _is_sensitive_file("id_rsa") is True
+        assert _is_sensitive_file("id_ed25519.pub") is True
+        assert _is_sensitive_file("server.pem") is True
+        assert _is_sensitive_file("tls.key") is True
+        assert _is_sensitive_file(".netrc") is True
+        assert _is_sensitive_file(".env") is True
+        assert _is_sensitive_file(".env.local") is True
+        assert _is_sensitive_file("production.env") is True
+        assert _is_sensitive_file(".env.example") is False
+        assert _is_sensitive_file("main.py") is False
+        assert _is_sensitive_file("README.md") is False
+
+    def test_ssh_dir_skipped_even_with_glob(self, tmp_path):
+        ssh = tmp_path / ".ssh"
+        ssh.mkdir()
+        (ssh / "id_rsa").write_text("-----BEGIN OPENSSH PRIVATE KEY-----")
+        (ssh / "config").write_text("Host example")
+        (tmp_path / ".bashrc").write_text("export X=1")
+        gf = _compile_glob_filter(".*")
+        files = _walk_folder(tmp_path, glob_filter=gf)
+        names = {f.name for f in files}
+        assert "id_rsa" not in names
+        assert "config" not in names
+        assert ".bashrc" in names
+
+    def test_aws_dir_skipped(self, tmp_path):
+        aws = tmp_path / ".aws"
+        aws.mkdir()
+        (aws / "credentials").write_text("[default]\naws_secret_access_key=x")
+        (tmp_path / "README.md").write_text("# Hi")
+        gf = _compile_glob_filter(".*,*.md")
+        files = _walk_folder(tmp_path, glob_filter=gf)
+        names = {f.name for f in files}
+        assert "credentials" not in names
+        assert "README.md" in names
+
+    def test_env_files_skipped_by_default(self, tmp_path):
+        (tmp_path / "production.env").write_text("API_KEY=x")
+        (tmp_path / ".env").write_text("API_KEY=x")
+        (tmp_path / ".env.example").write_text("API_KEY=")
+        (tmp_path / "README.md").write_text("# Hi")
+        files = _walk_folder(tmp_path)
+        names = {f.name for f in files}
+        assert "production.env" not in names
+        assert ".env" not in names
+        assert ".env.example" in names
+        assert "README.md" in names
+
+    def test_env_files_skipped_even_with_glob(self, tmp_path):
+        (tmp_path / "production.env").write_text("API_KEY=x")
+        (tmp_path / "README.md").write_text("# Hi")
+        gf = _compile_glob_filter("*.env,*.md")
+        files = _walk_folder(tmp_path, glob_filter=gf)
+        names = {f.name for f in files}
+        assert "production.env" not in names
+        assert "README.md" in names
+
+    def test_key_files_skipped_even_when_git_tracked(self, tmp_path, no_git):
+        (tmp_path / "server.pem").write_text("-----BEGIN CERTIFICATE-----")
+        (tmp_path / "app.py").write_text("x = 1")
+        gf = _compile_glob_filter("*")
+        files = _walk_folder(tmp_path, respect_gitignore=True, glob_filter=gf)
+        names = {f.name for f in files}
+        assert "server.pem" not in names
+        assert "app.py" in names
 
 
 class TestFolderLoader:
@@ -416,3 +604,16 @@ class TestProjectLoader:
         fragments = project_loader(str(sample_folder))
         assert len(fragments) >= 4  # tree + at least 3 files
         assert any("My Project" in str(f) for f in fragments[1:])
+
+    def test_truncation_noted_in_file_tree(self, tmp_path, monkeypatch, no_git):
+        monkeypatch.setattr(llm_fragments_folder, "MAX_FILES", 3)
+        for i in range(5):
+            (tmp_path / f"doc{i}.md").write_text(f"doc {i}")
+        fragments = project_loader(str(tmp_path))
+        assert "file limit" in str(fragments[0])
+        # tree fragment + exactly MAX_FILES file fragments
+        assert len(fragments) == 4
+
+    def test_no_truncation_note_when_under_limit(self, sample_folder):
+        fragments = project_loader(str(sample_folder))
+        assert "file limit" not in str(fragments[0])
